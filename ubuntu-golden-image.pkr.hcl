@@ -91,8 +91,8 @@ source "amazon-ebs" "ubuntu" {
   source_ami    = data.amazon-ami.ubuntu.id
   ssh_username  = var.ssh_username
 
-  # AMI tags
-  ami_tags = {
+  # Tags for the AMI
+  tags = {
     Name        = var.image_name
     OS          = "Ubuntu"
     Version     = var.ubuntu_version
@@ -100,7 +100,7 @@ source "amazon-ebs" "ubuntu" {
     Environment = "Production"
   }
 
-  # Snapshot tags
+  # Tags for the snapshot
   snapshot_tags = {
     Name        = var.image_name
     OS          = "Ubuntu"
