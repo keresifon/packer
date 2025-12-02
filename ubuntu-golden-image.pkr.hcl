@@ -7,6 +7,17 @@ packer {
   }
 }
 
+# HCP Packer Registry Configuration
+# This will auto-create the bucket if it doesn't exist
+hcp {
+  bucket_name = var.hcp_bucket_name
+  description = "Ubuntu Golden Image for AWS"
+  labels = {
+    "os"       = "ubuntu"
+    "managed-by" = "packer"
+  }
+}
+
 # Variables - AWS Configuration
 # Note: AWS credentials are provided via environment/role (OIDC in GitHub Actions)
 # For local development, use AWS CLI or environment variables
