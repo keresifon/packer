@@ -71,18 +71,9 @@ variable "hcp_project_id" {
 }
 
 # Data source for latest Ubuntu AMI
-locals {
-  ubuntu_codenames = {
-    "22.04" = "jammy"
-    "20.04" = "focal"
-    "18.04" = "bionic"
-  }
-  ubuntu_codename = lookup(local.ubuntu_codenames, var.ubuntu_version, "jammy")
-}
-
 data "amazon-ami" "ubuntu" {
   filters = {
-    name                = "ubuntu/images/hvm-ssd/ubuntu-${local.ubuntu_codename}-${var.ubuntu_version}-amd64-server-*"
+    name                = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
     root-device-type    = "ebs"
     virtualization-type = "hvm"
   }
@@ -185,15 +176,7 @@ build {
     ]
   }
 
-  # Post-processing: HCP Packer metadata
-  post-processor "hcp-packer" {
-    bucket_name = var.hcp_bucket_name
-    description = "Ubuntu ${var.ubuntu_version} Golden Image built on ${timestamp()}"
-    labels = {
-      "os"       = "ubuntu"
-      "version"  = var.ubuntu_version
-      "region"   = var.aws_region
-    }
-  }
+  # HCP Packer integration is handled by the hcp_packer_registry block above
+  # No post-processor needed - metadata is published automatically
 }
 
