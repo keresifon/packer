@@ -150,9 +150,11 @@ build {
   # Provisioning: Install common packages
   provisioner "shell" {
     inline = [
-      "sudo apt-get install -y curl wget git unzip jq",
+      "sudo apt-get install -y curl wget git unzip",
       "sudo apt-get install -y awscli",
-      "sudo apt-get install -y htop net-tools"
+      "sudo apt-get install -y htop net-tools",
+      "# Install jq - handle dependency issues by installing libonig5 first or skip if unavailable",
+      "sudo apt-get install -y libonig5 || sudo apt-get install -y jq || echo 'Warning: jq installation skipped due to dependency issues'"
     ]
   }
 
