@@ -1,0 +1,125 @@
+name: Build Ubuntu Golden Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: 'Ubuntu version to build'
+        required: false
+        default: '22.04'
+        type: choice
+        options:
+          - '22.04'
+          - '20.04'
+      aws_region:
+        description: 'AWS region'
+        required: false
+        default: 'us-east-1'
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - '*.pkr.hcl'
+      - '.github/workflows/**'
+  pull_request:
+    branches:
+      - main
+
+env:
+  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  PKR_VAR_ubuntu_version: ${{ github.event.inputs.ubuntu_version || '22.04' }}
+  PKR_VAR_hcp_bucket_name: ubuntu-golden-image
+
+jobs:
+  validate:
+    name: Validate Packer Template
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for OIDC
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "1.10.0"
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.PKR_VAR_aws_region }}
+
+      - name: Initialize Packer
+        run: packer init ubuntu-golden-image.pkr.hcl
+
+      - name: Validate Packer template
+        env:
+          HCP_CLIENT_ID: ${{ secrets.HCP_CLIENT_ID }}
+          HCP_CLIENT_SECRET: ${{ secrets.HCP_CLIENT_SECRET }}
+        run: |
+          packer validate \
+            -var="hcp_client_id=${{ secrets.HCP_CLIENT_ID }}" \
+            -var="hcp_client_secret=${{ secrets.HCP_CLIENT_SECRET }}" \
+            -var="hcp_organization_id=${{ secrets.HCP_ORGANIZATION_ID }}" \
+            -var="hcp_project_id=${{ secrets.HCP_PROJECT_ID }}" \
+            ubuntu-golden-image.pkr.hcl
+
+  build:
+    name: Build AMI
+    needs: validate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    permissions:
+      id-token: write  # Required for OIDC
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "1.10.0"
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.PKR_VAR_aws_region }}
+
+      - name: Initialize Packer
+        run: packer init ubuntu-golden-image.pkr.hcl
+
+      - name: Authenticate with HCP Packer
+        env:
+          HCP_CLIENT_ID: ${{ secrets.HCP_CLIENT_ID }}
+          HCP_CLIENT_SECRET: ${{ secrets.HCP_CLIENT_SECRET }}
+        run: packer hcp auth login
+
+      - name: Build Packer image
+        env:
+          HCP_CLIENT_ID: ${{ secrets.HCP_CLIENT_ID }}
+          HCP_CLIENT_SECRET: ${{ secrets.HCP_CLIENT_SECRET }}
+          HCP_ORGANIZATION_ID: ${{ secrets.HCP_ORGANIZATION_ID }}
+          HCP_PROJECT_ID: ${{ secrets.HCP_PROJECT_ID }}
+        run: |
+          packer build \
+            -var="hcp_client_id=${{ secrets.HCP_CLIENT_ID }}" \
+            -var="hcp_client_secret=${{ secrets.HCP_CLIENT_SECRET }}" \
+            -var="hcp_organization_id=${{ secrets.HCP_ORGANIZATION_ID }}" \
+            -var="hcp_project_id=${{ secrets.HCP_PROJECT_ID }}" \
+            -var="aws_region=${{ env.PKR_VAR_aws_region }}" \
+            -var="ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}" \
+            -var="hcp_bucket_name=${{ env.PKR_VAR_hcp_bucket_name }}" \
+            ubuntu-golden-image.pkr.hcl
+
+      - name: Output AMI ID
+        if: success()
+        run: |
+          echo "AMI build completed successfully!"
+          echo "Check HCP Packer for the latest image metadata"
+
