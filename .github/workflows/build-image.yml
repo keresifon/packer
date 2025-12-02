@@ -60,6 +60,8 @@ jobs:
         env:
           HCP_CLIENT_ID: ${{ secrets.HCP_CLIENT_ID }}
           HCP_CLIENT_SECRET: ${{ secrets.HCP_CLIENT_SECRET }}
+          HCP_ORGANIZATION_ID: ${{ secrets.HCP_ORGANIZATION_ID }}
+          HCP_PROJECT_ID: ${{ secrets.HCP_PROJECT_ID }}
         run: |
           packer validate \
             -var="hcp_client_id=${{ secrets.HCP_CLIENT_ID }}" \
@@ -93,12 +95,6 @@ jobs:
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
-
-      - name: Authenticate with HCP Packer
-        env:
-          HCP_CLIENT_ID: ${{ secrets.HCP_CLIENT_ID }}
-          HCP_CLIENT_SECRET: ${{ secrets.HCP_CLIENT_SECRET }}
-        run: packer hcp auth login
 
       - name: Build Packer image
         env:
