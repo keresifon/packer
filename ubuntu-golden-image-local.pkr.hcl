@@ -8,8 +8,7 @@ packer {
 }
 
 # Variables - AWS Configuration
-# Note: AWS credentials are provided via environment/role (OIDC in GitHub Actions)
-# For local development, use AWS CLI or environment variables
+# AWS credentials are provided via AWS CLI or environment variables
 variable "aws_region" {
   type        = string
   description = "AWS region to build the image in"
@@ -137,6 +136,10 @@ build {
       "sudo sync"
     ]
   }
-
 }
+
+
+
+
+
 
