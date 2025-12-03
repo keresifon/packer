@@ -8,17 +8,10 @@
 #   export AWS_ACCESS_KEY_ID="your-access-key"
 #   export AWS_SECRET_ACCESS_KEY="your-secret-key"
 #   export AWS_DEFAULT_REGION="us-east-1"
-aws_region         = "us-east-1"
-
-# HCP Packer Configuration
-hcp_client_id       = "YOUR_HCP_CLIENT_ID"
-hcp_client_secret   = "YOUR_HCP_CLIENT_SECRET"
-hcp_organization_id = "YOUR_HCP_ORG_ID"
-hcp_project_id      = "YOUR_HCP_PROJECT_ID"
+aws_region = "us-east-1"
 
 # Image Configuration
-ubuntu_version   = "22.04"
-instance_type    = "t3.micro"
-image_name       = "ubuntu-golden-image"
-hcp_bucket_name  = "ubuntu-golden-image"
+ubuntu_version = "22.04"
+instance_type  = "t3.micro"
+image_name     = "ubuntu-golden-image"
 

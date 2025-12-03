@@ -29,7 +29,6 @@ on:
 env:
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
   PKR_VAR_ubuntu_version: ${{ github.event.inputs.ubuntu_version || '22.04' }}
-  PKR_VAR_hcp_bucket_name: ubuntu-golden-image
 
 jobs:
   validate:
@@ -57,18 +56,7 @@ jobs:
         run: packer init ubuntu-golden-image.pkr.hcl
 
       - name: Validate Packer template
-        env:
-          HCP_CLIENT_ID: ${{ secrets.HCP_CLIENT_ID }}
-          HCP_CLIENT_SECRET: ${{ secrets.HCP_CLIENT_SECRET }}
-          HCP_ORGANIZATION_ID: ${{ secrets.HCP_ORGANIZATION_ID }}
-          HCP_PROJECT_ID: ${{ secrets.HCP_PROJECT_ID }}
-        run: |
-          packer validate \
-            -var="hcp_client_id=${{ secrets.HCP_CLIENT_ID }}" \
-            -var="hcp_client_secret=${{ secrets.HCP_CLIENT_SECRET }}" \
-            -var="hcp_organization_id=${{ secrets.HCP_ORGANIZATION_ID }}" \
-            -var="hcp_project_id=${{ secrets.HCP_PROJECT_ID }}" \
-            ubuntu-golden-image.pkr.hcl
+        run: packer validate ubuntu-golden-image.pkr.hcl
 
   build:
     name: Build AMI
@@ -97,25 +85,15 @@ jobs:
         run: packer init ubuntu-golden-image.pkr.hcl
 
       - name: Build Packer image
-        env:
-          HCP_CLIENT_ID: ${{ secrets.HCP_CLIENT_ID }}
-          HCP_CLIENT_SECRET: ${{ secrets.HCP_CLIENT_SECRET }}
-          HCP_ORGANIZATION_ID: ${{ secrets.HCP_ORGANIZATION_ID }}
-          HCP_PROJECT_ID: ${{ secrets.HCP_PROJECT_ID }}
         run: |
           packer build \
-            -var="hcp_client_id=${{ secrets.HCP_CLIENT_ID }}" \
-            -var="hcp_client_secret=${{ secrets.HCP_CLIENT_SECRET }}" \
-            -var="hcp_organization_id=${{ secrets.HCP_ORGANIZATION_ID }}" \
-            -var="hcp_project_id=${{ secrets.HCP_PROJECT_ID }}" \
             -var="aws_region=${{ env.PKR_VAR_aws_region }}" \
             -var="ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}" \
-            -var="hcp_bucket_name=${{ env.PKR_VAR_hcp_bucket_name }}" \
             ubuntu-golden-image.pkr.hcl
 
       - name: Output AMI ID
         if: success()
         run: |
           echo "AMI build completed successfully!"
-          echo "Check HCP Packer for the latest image metadata"
+          echo "Check AWS EC2 Console for the latest AMI"
 
