@@ -111,8 +111,12 @@ build {
   provisioner "shell" {
     inline = [
       "sudo apt-get install -y curl wget git unzip",
-      "sudo apt-get install -y awscli",
       "sudo apt-get install -y htop net-tools",
+      "# Install AWS CLI v2 using official installer",
+      "curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"/tmp/awscliv2.zip\"",
+      "unzip -q /tmp/awscliv2.zip -d /tmp",
+      "sudo /tmp/aws/install",
+      "rm -rf /tmp/aws /tmp/awscliv2.zip",
       "# Install jq - handle dependency issues by installing libonig5 first or skip if unavailable",
       "sudo apt-get install -y libonig5 || sudo apt-get install -y jq || echo 'Warning: jq installation skipped due to dependency issues'"
     ]
