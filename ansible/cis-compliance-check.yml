@@ -1,0 +1,261 @@
+---
+# CIS Compliance Check Playbook
+# Validates CIS benchmark compliance and optionally fails build if threshold not met
+
+- name: CIS Ubuntu 22.04 LTS Compliance Check
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    cis_level: 2  # CIS Benchmark Level (1 or 2)
+    cis_compliance_threshold: 80  # Minimum compliance percentage to pass
+    fail_build_on_non_compliance: false  # Set to true to fail build on non-compliance
+
+  tasks:
+    - name: Install compliance checking tools
+      apt:
+        name:
+          - python3-pip
+          - jq
+        state: present
+        update_cache: yes
+
+    - name: Check CIS 1.1.1.1 - cramfs disabled
+      stat:
+        path: /etc/modprobe.d/CIS.conf
+      register: cis_conf
+
+    - name: Verify cramfs is disabled
+      shell: grep -q "install cramfs /bin/true" /etc/modprobe.d/CIS.conf || echo "FAIL"
+      register: cramfs_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check CIS 1.4.1 - Bootloader permissions
+      stat:
+        path: /boot/grub/grub.cfg
+      register: grub_cfg
+
+    - name: Verify bootloader permissions
+      shell: |
+        PERMS=$(stat -c "%a" /boot/grub/grub.cfg)
+        OWNER=$(stat -c "%U:%G" /boot/grub/grub.cfg)
+        if [ "$PERMS" = "600" ] && [ "$OWNER" = "root:root" ]; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: bootloader_check
+      failed_when: false
+      changed_when: false
+      when: grub_cfg.stat.exists
+
+    - name: Check CIS 1.5.1 - Core dumps restricted
+      shell: |
+        if grep -q "hard core" /etc/security/limits.conf && [ "$(sysctl -n fs.suid_dumpable)" = "0" ]; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: coredump_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check CIS 1.5.3 - ASLR enabled
+      shell: |
+        if [ "$(sysctl -n kernel.randomize_va_space)" = "2" ]; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: aslr_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check CIS 1.6.1.1 - AppArmor installed
+      command: which apparmor_status
+      register: apparmor_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check CIS 3.1.1 - IP forwarding disabled
+      shell: |
+        if [ "$(sysctl -n net.ipv4.ip_forward)" = "0" ]; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: ip_forward_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check CIS 3.3.9 - TCP SYN Cookies enabled
+      shell: |
+        if [ "$(sysctl -n net.ipv4.tcp_syncookies)" = "1" ]; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: syn_cookies_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check CIS 4.2.1.1 - rsyslog installed and enabled
+      shell: |
+        if command -v rsyslogd &> /dev/null && systemctl is-enabled rsyslog &> /dev/null; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: rsyslog_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check CIS 5.1.1 - Time synchronization configured
+      shell: |
+        if command -v chronyd &> /dev/null && systemctl is-enabled chronyd &> /dev/null; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: timesync_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check CIS 6.1.1 - /etc/passwd permissions
+      shell: |
+        if [ -f /etc/passwd ] && [ "$(stat -c "%a" /etc/passwd)" = "644" ]; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: passwd_perm_check
+      failed_when: false
+      changed_when: false
+
+    # Level 2: Additional compliance checks
+    - name: Check CIS 5.2.1 - SSH Protocol version (Level 2)
+      shell: |
+        if grep -q "^Protocol 2" /etc/ssh/sshd_config; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: ssh_protocol_check
+      failed_when: false
+      changed_when: false
+      when: cis_level >= 2
+
+    - name: Check CIS 5.2.2 - SSH LogLevel (Level 2)
+      shell: |
+        if grep -q "^LogLevel INFO" /etc/ssh/sshd_config; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: ssh_loglevel_check
+      failed_when: false
+      changed_when: false
+      when: cis_level >= 2
+
+    - name: Check CIS 5.2.3 - SSH X11Forwarding disabled (Level 2)
+      shell: |
+        if grep -q "^X11Forwarding no" /etc/ssh/sshd_config; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: ssh_x11_check
+      failed_when: false
+      changed_when: false
+      when: cis_level >= 2
+
+    - name: Check CIS 6.2.1 - Password expiration configured (Level 2)
+      shell: |
+        if grep -q "^PASS_MAX_DAYS 365" /etc/login.defs || grep -q "^PASS_MAX_DAYS [0-9][0-9][0-9]$" /etc/login.defs; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: pass_max_days_check
+      failed_when: false
+      changed_when: false
+      when: cis_level >= 2
+
+    - name: Check CIS 6.2.2 - Minimum days between password changes (Level 2)
+      shell: |
+        if grep -q "^PASS_MIN_DAYS 7" /etc/login.defs || grep -q "^PASS_MIN_DAYS [0-9]$" /etc/login.defs; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: pass_min_days_check
+      failed_when: false
+      changed_when: false
+      when: cis_level >= 2
+
+    - name: Check CIS 6.3.1 - Cron permissions (Level 2)
+      shell: |
+        if [ -d /etc/cron.d ] && [ "$(stat -c "%a" /etc/cron.d)" = "700" ]; then
+          echo "PASS"
+        else
+          echo "FAIL"
+        fi
+      register: cron_d_perm_check
+      failed_when: false
+      changed_when: false
+      when: cis_level >= 2
+
+    - name: Set default values for Level 2 checks
+      set_fact:
+        ssh_protocol_check: "{{ ssh_protocol_check | default({'stdout': 'SKIP'}) }}"
+        ssh_loglevel_check: "{{ ssh_loglevel_check | default({'stdout': 'SKIP'}) }}"
+        ssh_x11_check: "{{ ssh_x11_check | default({'stdout': 'SKIP'}) }}"
+        pass_max_days_check: "{{ pass_max_days_check | default({'stdout': 'SKIP'}) }}"
+        pass_min_days_check: "{{ pass_min_days_check | default({'stdout': 'SKIP'}) }}"
+        cron_d_perm_check: "{{ cron_d_perm_check | default({'stdout': 'SKIP'}) }}"
+
+    - name: Calculate compliance percentage
+      set_fact:
+        compliance_checks_base:
+          - "{{ cramfs_check.stdout }}"
+          - "{{ bootloader_check.stdout | default('PASS') }}"
+          - "{{ coredump_check.stdout }}"
+          - "{{ aslr_check.stdout }}"
+          - "{{ apparmor_check.rc | ternary('PASS', 'FAIL') }}"
+          - "{{ ip_forward_check.stdout }}"
+          - "{{ syn_cookies_check.stdout }}"
+          - "{{ rsyslog_check.stdout }}"
+          - "{{ timesync_check.stdout }}"
+          - "{{ passwd_perm_check.stdout }}"
+        compliance_checks_level2:
+          - "{{ ssh_protocol_check.stdout }}"
+          - "{{ ssh_loglevel_check.stdout }}"
+          - "{{ ssh_x11_check.stdout }}"
+          - "{{ pass_max_days_check.stdout }}"
+          - "{{ pass_min_days_check.stdout }}"
+          - "{{ cron_d_perm_check.stdout }}"
+        compliance_checks: "{{ compliance_checks_base + (compliance_checks_level2 | select('ne', 'SKIP') | list) }}"
+        compliance_passed: "{{ compliance_checks | select('equalto', 'PASS') | list | length }}"
+        compliance_total: "{{ compliance_checks | length }}"
+        compliance_percentage: "{{ ((compliance_passed | int / compliance_total | int) * 100) | int }}"
+
+    - name: Display compliance report
+      debug:
+        msg:
+          - "=========================================="
+          - "CIS Compliance Report"
+          - "=========================================="
+          - "Passed: {{ compliance_passed }}/{{ compliance_total }}"
+          - "Compliance: {{ compliance_percentage }}%"
+          - "Threshold: {{ cis_compliance_threshold }}%"
+          - "=========================================="
+
+    - name: Fail build if compliance below threshold
+      fail:
+        msg: "CIS compliance ({{ compliance_percentage }}%) is below threshold ({{ cis_compliance_threshold }}%)"
+      when:
+        - compliance_percentage | int < cis_compliance_threshold | int
+        - fail_build_on_non_compliance | bool
+

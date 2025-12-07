@@ -4,6 +4,10 @@ packer {
       source  = "github.com/hashicorp/amazon"
       version = "~> 1"
     }
+    ansible = {
+      source  = "github.com/hashicorp/ansible"
+      version = "~> 1"
+    }
   }
 }
 
@@ -41,6 +45,25 @@ variable "ssh_username" {
   default     = "ubuntu"
 }
 
+# Variables - CIS Benchmark Configuration
+variable "cis_level" {
+  type        = number
+  description = "CIS Benchmark Level (1 or 2)"
+  default     = 2
+}
+
+variable "cis_compliance_threshold" {
+  type        = number
+  description = "Minimum compliance percentage to pass (0-100)"
+  default     = 80
+}
+
+variable "fail_on_non_compliance" {
+  type        = bool
+  description = "Fail build if compliance below threshold"
+  default     = false
+}
+
 # Data source for latest Ubuntu AMI
 data "amazon-ami" "ubuntu" {
   filters = {
@@ -69,6 +92,7 @@ source "amazon-ebs" "ubuntu" {
     Version     = var.ubuntu_version
     ManagedBy   = "Packer"
     Environment = "Production"
+    CISLevel    = "L${var.cis_level}"
   }
 
   # Tags for the snapshot
@@ -77,6 +101,7 @@ source "amazon-ebs" "ubuntu" {
     OS          = "Ubuntu"
     Version     = var.ubuntu_version
     ManagedBy   = "Packer"
+    CISLevel    = "L${var.cis_level}"
   }
 
   # Launch block device mappings
@@ -101,7 +126,7 @@ build {
     inline = [
       "sudo apt-get update",
       "sudo apt-get upgrade -y",
-      "sudo apt-get install -y software-properties-common",
+      "sudo apt-get install -y software-properties-common python3 python3-pip",
       "sudo apt-get autoremove -y",
       "sudo apt-get autoclean -y"
     ]
@@ -129,6 +154,36 @@ build {
       "sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config",
       "sudo systemctl restart sshd || true"
     ]
+  }
+
+  # Provisioning: Install Ansible
+  provisioner "shell" {
+    inline = [
+      "sudo pip3 install ansible",
+      "ansible --version"
+    ]
+  }
+
+  # Provisioning: CIS Benchmark Hardening with Ansible
+  provisioner "ansible-local" {
+    playbook_file   = "ansible/cis-hardening-playbook.yml"
+    extra_arguments = [
+      "-e", "cis_level=${var.cis_level}",
+      "-e", "cis_compliance_threshold=${var.cis_compliance_threshold}",
+      "-v"  # Verbose output
+    ]
+    inventory_groups = ["local"]
+  }
+
+  # Provisioning: CIS Compliance Check with Ansible
+  provisioner "ansible-local" {
+    playbook_file   = "ansible/cis-compliance-check.yml"
+    extra_arguments = [
+      "-e", "cis_compliance_threshold=${var.cis_compliance_threshold}",
+      "-e", "fail_build_on_non_compliance=${var.fail_on_non_compliance}",
+      "-v"  # Verbose output
+    ]
+    inventory_groups = ["local"]
   }
 
   # Provisioning: Clean up
