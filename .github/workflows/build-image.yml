@@ -115,21 +115,35 @@ jobs:
       - name: Build Packer image
         id: build
         run: |
+          set -e  # Exit on error
+          
+          # Run packer build and capture exit code
           packer build \
             -var="aws_region=${{ env.PKR_VAR_aws_region }}" \
             -var="ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}" \
             ubuntu-golden-image.pkr.hcl | tee packer-build.log
           
-          # Extract AMI ID from Packer output
-          # Packer outputs: "us-east-1: ami-xxxxxxxxxxxxxxxxx"
-          AMI_ID=$(grep -oE 'ami-[a-z0-9]{17}' packer-build.log | tail -1 || echo "")
+          PACKER_EXIT_CODE=${PIPESTATUS[0]}
+          
+          # Check if packer build succeeded
+          if [ $PACKER_EXIT_CODE -ne 0 ]; then
+            echo "❌ Packer build failed with exit code: $PACKER_EXIT_CODE"
+            echo "Build log saved to packer-build.log"
+            exit $PACKER_EXIT_CODE
+          fi
+          
+          # Extract AMI ID from Packer output (only if build succeeded)
+          # Packer outputs: "us-east-1: ami-xxxxxxxxxxxxxxxxx" at the end on success
+          # Look for the pattern after "AMIs were created:" which indicates successful build
+          AMI_ID=$(grep -A 2 "AMIs were created:" packer-build.log | grep -oE 'ami-[a-z0-9]{17}' | head -1 || echo "")
           
           if [ -n "$AMI_ID" ] && [ "$AMI_ID" != "" ]; then
             echo "ami_id=$AMI_ID" >> $GITHUB_OUTPUT
             echo "✅ AMI ID extracted: $AMI_ID"
           else
-            echo "⚠️ Warning: Could not extract AMI ID from build output"
-            echo "ami_id=" >> $GITHUB_OUTPUT
+            echo "❌ Error: Could not extract AMI ID from successful build output"
+            echo "Build may have completed but AMI ID not found in output"
+            exit 1
           fi
 
       - name: Output AMI ID
