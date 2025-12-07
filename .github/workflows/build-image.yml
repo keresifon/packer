@@ -16,11 +16,25 @@ on:
         required: false
         default: 'us-east-1'
         type: string
+      target_regions:
+        description: 'Comma-separated list of target regions to copy AMI (e.g., us-west-2,eu-west-1)'
+        required: false
+        default: 'us-west-2,eu-west-1'
+        type: string
+      store_in_parameter_store:
+        description: 'Store AMI IDs in Systems Manager Parameter Store'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
   push:
     branches:
       - main
     paths:
       - '*.pkr.hcl'
+      - 'ansible/**'
       - '.github/workflows/**'
   pull_request:
     branches:
@@ -29,6 +43,8 @@ on:
 env:
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
   PKR_VAR_ubuntu_version: ${{ github.event.inputs.ubuntu_version || '22.04' }}
+  TARGET_REGIONS: ${{ github.event.inputs.target_regions || 'us-west-2,eu-west-1' }}
+  STORE_IN_PARAMETER_STORE: ${{ github.event.inputs.store_in_parameter_store || 'true' }}
 
 jobs:
   validate:
@@ -51,6 +67,12 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.PKR_VAR_aws_region }}
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install ansible
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
@@ -81,19 +103,496 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.PKR_VAR_aws_region }}
 
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install ansible
+
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
 
       - name: Build Packer image
+        id: build
         run: |
           packer build \
             -var="aws_region=${{ env.PKR_VAR_aws_region }}" \
             -var="ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}" \
-            ubuntu-golden-image.pkr.hcl
+            ubuntu-golden-image.pkr.hcl | tee packer-build.log
+          
+          # Extract AMI ID from Packer output
+          # Packer outputs: "us-east-1: ami-xxxxxxxxxxxxxxxxx"
+          AMI_ID=$(grep -oE 'ami-[a-z0-9]{17}' packer-build.log | tail -1 || echo "")
+          
+          if [ -n "$AMI_ID" ] && [ "$AMI_ID" != "" ]; then
+            echo "ami_id=$AMI_ID" >> $GITHUB_OUTPUT
+            echo "✅ AMI ID extracted: $AMI_ID"
+          else
+            echo "⚠️ Warning: Could not extract AMI ID from build output"
+            echo "ami_id=" >> $GITHUB_OUTPUT
+          fi
 
       - name: Output AMI ID
         if: success()
         run: |
           echo "AMI build completed successfully!"
-          echo "Check AWS EC2 Console for the latest AMI"
+          if [ -n "${{ steps.build.outputs.ami_id }}" ]; then
+            echo "AMI ID: ${{ steps.build.outputs.ami_id }}"
+            echo "Check AWS EC2 Console for the latest AMI"
+          fi
+
+      - name: Upload Packer build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packer-build-log
+          path: packer-build.log
+          retention-days: 7
+
+  validate-ami:
+    name: Validate AMI
+    needs: build
+    runs-on: ubuntu-latest
+    if: success() && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != ''
+    permissions:
+      id-token: write  # Required for OIDC
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.PKR_VAR_aws_region }}
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install ansible
+
+      - name: Install AWS CLI
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install
+          rm -rf aws awscliv2.zip
+
+      - name: Wait for AMI to be available
+        run: |
+          AMI_ID="${{ needs.build.outputs.ami_id }}"
+          echo "Waiting for AMI $AMI_ID to be available..."
+          aws ec2 wait image-available \
+            --image-ids "$AMI_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --max-attempts 30 \
+            --delay 10 || echo "AMI may still be initializing"
+
+      - name: Create security group for validation instance
+        id: create-sg
+        run: |
+          SG_NAME="packer-validation-$(date +%s)"
+          SG_ID=$(aws ec2 create-security-group \
+            --group-name "$SG_NAME" \
+            --description "Temporary security group for AMI validation" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'GroupId' \
+            --output text)
+          
+          # Allow SSH from anywhere (GitHub Actions IPs)
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$SG_ID" \
+            --protocol tcp \
+            --port 22 \
+            --cidr 0.0.0.0/0 \
+            --region ${{ env.PKR_VAR_aws_region }} > /dev/null
+          
+          echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
+          echo "Security group created: $SG_ID"
+
+      - name: Launch test instance
+        id: launch-instance
+        run: |
+          AMI_ID="${{ needs.build.outputs.ami_id }}"
+          SG_ID="${{ steps.create-sg.outputs.sg_id }}"
+          INSTANCE_NAME="ami-validation-$(date +%Y%m%d-%H%M%S)"
+          
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "$AMI_ID" \
+            --instance-type t3.micro \
+            --security-group-ids "$SG_ID" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Purpose,Value=AMI-Validation},{Key=Build,Value=${{ github.run_id }}]}" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+          
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Test instance launched: $INSTANCE_ID"
+          
+          # Wait for instance to be running
+          aws ec2 wait instance-running \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }}
+
+      - name: Get instance IP address
+        id: get-ip
+        run: |
+          INSTANCE_ID="${{ steps.launch-instance.outputs.instance_id }}"
+          
+          # Wait a bit for public IP assignment
+          sleep 10
+          
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          
+          # Retry if IP not available
+          RETRY=0
+          while [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "None" ]; do
+            if [ $RETRY -ge 10 ]; then
+              echo "Error: Could not get public IP after 10 retries"
+              exit 1
+            fi
+            sleep 5
+            PUBLIC_IP=$(aws ec2 describe-instances \
+              --instance-ids "$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} \
+              --query 'Reservations[0].Instances[0].PublicIpAddress' \
+              --output text)
+            RETRY=$((RETRY + 1))
+          done
+          
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "Instance public IP: $PUBLIC_IP"
+
+      - name: Wait for SSH to be available
+        run: |
+          PUBLIC_IP="${{ steps.get-ip.outputs.public_ip }}"
+          echo "Waiting for SSH to be available on $PUBLIC_IP..."
+          
+          RETRY=0
+          MAX_RETRIES=30
+          while [ $RETRY -lt $MAX_RETRIES ]; do
+            if ssh -o StrictHostKeyChecking=no \
+                -o ConnectTimeout=5 \
+                -o UserKnownHostsFile=/dev/null \
+                -o BatchMode=yes \
+                ubuntu@"$PUBLIC_IP" "echo 'SSH ready'" 2>/dev/null; then
+              echo "SSH is ready!"
+              exit 0
+            fi
+            RETRY=$((RETRY + 1))
+            echo "Waiting for SSH... ($RETRY/$MAX_RETRIES)"
+            sleep 10
+          done
+          
+          echo "ERROR: SSH not available after $MAX_RETRIES attempts"
+          exit 1
+
+      - name: Setup SSH key for Ansible
+        run: |
+          # Generate temporary SSH key for Ansible
+          ssh-keygen -t rsa -b 4096 -f /tmp/ansible_key -N "" -q
+          
+          # Copy public key to instance (using existing SSH access)
+          PUBLIC_IP="${{ steps.get-ip.outputs.public_ip }}"
+          ssh -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ubuntu@"$PUBLIC_IP" \
+              "echo '$(cat /tmp/ansible_key.pub)' >> ~/.ssh/authorized_keys" || true
+
+      - name: Run AMI validation tests
+        id: validate
+        run: |
+          PUBLIC_IP="${{ steps.get-ip.outputs.public_ip }}"
+          
+          export ANSIBLE_HOST_KEY_CHECKING=False
+          export ANSIBLE_SSH_PRIVATE_KEY_FILE=/tmp/ansible_key
+          
+          ansible-playbook \
+            -i "$PUBLIC_IP," \
+            -u ubuntu \
+            ansible/ami-validation-playbook.yml \
+            -e "cis_level=2" \
+            -e "cis_compliance_threshold=80" \
+            -e "fail_on_validation_failure=false" \
+            -v
+          
+          VALIDATION_EXIT=$?
+          echo "validation_exit_code=$VALIDATION_EXIT" >> $GITHUB_OUTPUT
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: |
+            ansible/ami-validation-playbook.yml
+          retention-days: 30
+
+      - name: Cleanup - Terminate test instance
+        if: always()
+        run: |
+          INSTANCE_ID="${{ steps.launch-instance.outputs.instance_id }}"
+          if [ -n "$INSTANCE_ID" ]; then
+            echo "Terminating test instance: $INSTANCE_ID"
+            aws ec2 terminate-instances \
+              --instance-ids "$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} > /dev/null || true
+            
+            # Wait for termination
+            aws ec2 wait instance-terminated \
+              --instance-ids "$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} || true
+          fi
+
+      - name: Cleanup - Delete security group
+        if: always()
+        run: |
+          SG_ID="${{ steps.create-sg.outputs.sg_id }}"
+          if [ -n "$SG_ID" ]; then
+            echo "Deleting security group: $SG_ID"
+            aws ec2 delete-security-group \
+              --group-id "$SG_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} || true
+          fi
+
+      - name: Validation Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "AMI Validation Summary"
+          echo "=========================================="
+          echo "AMI ID: ${{ needs.build.outputs.ami_id }}"
+          echo "Validation Exit Code: ${{ steps.validate.outputs.validation_exit_code }}"
+          if [ "${{ steps.validate.outputs.validation_exit_code }}" = "0" ]; then
+            echo "Status: ✅ VALIDATION PASSED"
+          else
+            echo "Status: ❌ VALIDATION FAILED"
+          fi
+          echo "=========================================="
+
+  copy-ami:
+    name: Copy AMI to Target Regions
+    needs: [build, validate-ami]
+    runs-on: ubuntu-latest
+    if: success() && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != ''
+    permissions:
+      id-token: write  # Required for OIDC
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.PKR_VAR_aws_region }}
+
+      - name: Install AWS CLI and jq
+        run: |
+          # Install AWS CLI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install
+          rm -rf aws awscliv2.zip
+          
+          # Install jq
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Parse target regions
+        id: parse-regions
+        run: |
+          if [ -z "${{ env.TARGET_REGIONS }}" ] || [ "${{ env.TARGET_REGIONS }}" = "" ]; then
+            echo "No target regions specified, skipping copy"
+            echo "regions_json=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Convert comma-separated regions to JSON array
+          REGIONS_JSON=$(echo "${{ env.TARGET_REGIONS }}" | tr ',' '\n' | jq -R . | jq -s .)
+          echo "regions_json=$REGIONS_JSON" >> $GITHUB_OUTPUT
+          echo "Target regions: ${{ env.TARGET_REGIONS }}"
+
+      - name: Copy AMI to target regions
+        id: copy-ami
+        run: |
+          SOURCE_AMI_ID="${{ needs.build.outputs.ami_id }}"
+          SOURCE_REGION="${{ env.PKR_VAR_aws_region }}"
+          AMI_NAME=$(aws ec2 describe-images \
+            --image-ids "$SOURCE_AMI_ID" \
+            --region "$SOURCE_REGION" \
+            --query 'Images[0].Name' \
+            --output text)
+          
+          echo "Source AMI: $SOURCE_AMI_ID ($AMI_NAME) in $SOURCE_REGION"
+          
+          # Parse regions from JSON
+          REGIONS=$(echo '${{ steps.parse-regions.outputs.regions_json }}' | jq -r '.[]')
+          
+          if [ -z "$REGIONS" ]; then
+            echo "No regions to copy to"
+            echo "copied_amis={}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Copy AMI to each target region and build JSON
+          COPIED_AMIS_JSON="{}"
+          
+          for TARGET_REGION in $REGIONS; do
+            TARGET_REGION=$(echo "$TARGET_REGION" | tr -d '"' | xargs)
+            echo "=========================================="
+            echo "Copying AMI to $TARGET_REGION..."
+            echo "=========================================="
+            
+            # Copy AMI
+            COPIED_AMI_ID=$(aws ec2 copy-image \
+              --source-image-id "$SOURCE_AMI_ID" \
+              --source-region "$SOURCE_REGION" \
+              --region "$TARGET_REGION" \
+              --name "$AMI_NAME" \
+              --description "Copied from $SOURCE_REGION - $AMI_NAME" \
+              --query 'ImageId' \
+              --output text)
+            
+            if [ -n "$COPIED_AMI_ID" ] && [ "$COPIED_AMI_ID" != "None" ]; then
+              echo "✅ AMI copied successfully: $COPIED_AMI_ID"
+              
+              # Add to JSON object
+              COPIED_AMIS_JSON=$(echo "$COPIED_AMIS_JSON" | jq --arg region "$TARGET_REGION" --arg ami "$COPIED_AMI_ID" '. + {($region): $ami}')
+              
+              # Tag the copied AMI
+              aws ec2 create-tags \
+                --resources "$COPIED_AMI_ID" \
+                --region "$TARGET_REGION" \
+                --tags \
+                  Key=Name,Value="$AMI_NAME" \
+                  Key=SourceRegion,Value="$SOURCE_REGION" \
+                  Key=SourceAMI,Value="$SOURCE_AMI_ID" \
+                  Key=ManagedBy,Value="Packer" \
+                  Key=CopiedAt,Value="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
+            else
+              echo "❌ Failed to copy AMI to $TARGET_REGION"
+            fi
+          done
+          
+          echo "copied_amis=$COPIED_AMIS_JSON" >> $GITHUB_OUTPUT
+          
+          echo "=========================================="
+          echo "AMI Copy Summary"
+          echo "=========================================="
+          echo "$COPIED_AMIS_JSON" | jq -r 'to_entries[] | "\(.key): \(.value)"'
+          echo "=========================================="
+
+      - name: Wait for copied AMIs to be available
+        if: steps.copy-ami.outputs.copied_amis != '{}'
+        run: |
+          COPIED_AMIS_JSON='${{ steps.copy-ami.outputs.copied_amis }}'
+          
+          if [ "$COPIED_AMIS_JSON" = "{}" ] || [ -z "$COPIED_AMIS_JSON" ]; then
+            echo "No AMIs to wait for"
+            exit 0
+          fi
+          
+          echo "Waiting for copied AMIs to become available..."
+          
+          echo "$COPIED_AMIS_JSON" | jq -r 'to_entries[] | "\(.key)|\(.value)"' | while IFS='|' read -r REGION AMI_ID; do
+            echo "Waiting for $AMI_ID in $REGION..."
+            aws ec2 wait image-available \
+              --image-ids "$AMI_ID" \
+              --region "$REGION" \
+              --max-attempts 60 \
+              --delay 10 || echo "Warning: AMI $AMI_ID in $REGION may still be copying"
+            echo "✅ $AMI_ID in $REGION is now available"
+          done
+
+      - name: Store AMI IDs in Parameter Store
+        if: env.STORE_IN_PARAMETER_STORE == 'true' && steps.copy-ami.outputs.copied_amis != '{}'
+        run: |
+          SOURCE_AMI_ID="${{ needs.build.outputs.ami_id }}"
+          SOURCE_REGION="${{ env.PKR_VAR_aws_region }}"
+          AMI_NAME=$(aws ec2 describe-images \
+            --image-ids "$SOURCE_AMI_ID" \
+            --region "$SOURCE_REGION" \
+            --query 'Images[0].Name' \
+            --output text)
+          
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          PARAMETER_BASE="/packer/ubuntu-golden-image"
+          
+          echo "=========================================="
+          echo "Storing AMI IDs in Parameter Store"
+          echo "=========================================="
+          
+          # Store source AMI
+          aws ssm put-parameter \
+            --name "$PARAMETER_BASE/$SOURCE_REGION/latest" \
+            --value "$SOURCE_AMI_ID" \
+            --type "String" \
+            --description "Latest Ubuntu Golden Image AMI ID in $SOURCE_REGION (Built: $BUILD_DATE)" \
+            --overwrite \
+            --region "$SOURCE_REGION" || true
+          
+          aws ssm put-parameter \
+            --name "$PARAMETER_BASE/$SOURCE_REGION/$AMI_NAME" \
+            --value "$SOURCE_AMI_ID" \
+            --type "String" \
+            --description "Ubuntu Golden Image AMI ID: $AMI_NAME in $SOURCE_REGION" \
+            --overwrite \
+            --region "$SOURCE_REGION" || true
+          
+          echo "✅ Stored source AMI: $SOURCE_AMI_ID in $SOURCE_REGION"
+          
+          # Store copied AMIs
+          COPIED_AMIS_JSON='${{ steps.copy-ami.outputs.copied_amis }}'
+          
+          if [ "$COPIED_AMIS_JSON" != "{}" ] && [ -n "$COPIED_AMIS_JSON" ]; then
+            echo "$COPIED_AMIS_JSON" | jq -r 'to_entries[] | "\(.key)|\(.value)"' | while IFS='|' read -r REGION AMI_ID; do
+              aws ssm put-parameter \
+                --name "$PARAMETER_BASE/$REGION/latest" \
+                --value "$AMI_ID" \
+                --type "String" \
+                --description "Latest Ubuntu Golden Image AMI ID in $REGION (Copied: $BUILD_DATE)" \
+                --overwrite \
+                --region "$REGION" || true
+              
+              aws ssm put-parameter \
+                --name "$PARAMETER_BASE/$REGION/$AMI_NAME" \
+                --value "$AMI_ID" \
+                --type "String" \
+                --description "Ubuntu Golden Image AMI ID: $AMI_NAME in $REGION (Copied from $SOURCE_REGION)" \
+                --overwrite \
+                --region "$REGION" || true
+              
+              echo "✅ Stored copied AMI: $AMI_ID in $REGION"
+            done
+          fi
+          
+          echo "=========================================="
+          echo "Parameter Store Update Complete"
+          echo "=========================================="
+
+      - name: Copy AMI Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "AMI Distribution Summary"
+          echo "=========================================="
+          echo "Source AMI: ${{ needs.build.outputs.ami_id }} (${{ env.PKR_VAR_aws_region }})"
+          echo "Target Regions: ${{ env.TARGET_REGIONS }}"
+          echo "Parameter Store: ${{ env.STORE_IN_PARAMETER_STORE }}"
+          echo ""
+          echo "Copied AMIs:"
+          echo '${{ steps.copy-ami.outputs.copied_amis }}' | jq -r 'to_entries[] | "  \(.key): \(.value)"' || echo "  None"
+          echo ""
+          echo "Parameter Store Paths:"
+          echo "  /packer/ubuntu-golden-image/<region>/latest"
+          echo "  /packer/ubuntu-golden-image/<region>/<ami-name>"
+          echo "=========================================="
 

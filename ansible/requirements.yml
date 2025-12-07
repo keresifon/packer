@@ -1,0 +1,17 @@
+---
+# Ansible Galaxy requirements for CIS hardening
+collections:
+  - name: devsec.hardening
+    version: ">=7.0.0"
+  - name: community.general
+    version: ">=7.0.0"
+
+roles:
+  # CIS Ubuntu 22.04 LTS Benchmark role
+  - name: devsec.cis_ubuntu_22_04
+    src: https://github.com/dev-sec/cis-ubuntu-22.04-ansible
+    version: main
+    # Alternative: Use Ansible Galaxy role if available
+    # - name: devsec.cis_ubuntu_22_04
+    #   src: devsec.cis_ubuntu_22_04
+

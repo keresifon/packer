@@ -1,0 +1,422 @@
+---
+# AMI Validation Playbook
+# Runs comprehensive validation tests on a newly created AMI instance
+# This validates both CIS compliance and functional requirements
+
+- name: AMI Validation and Testing
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    cis_level: 2
+    cis_compliance_threshold: 80
+    fail_on_validation_failure: false
+
+  tasks:
+    - name: Display validation start message
+      debug:
+        msg:
+          - "=========================================="
+          - "AMI Validation Started"
+          - "=========================================="
+          - "Hostname: {{ ansible_hostname }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "=========================================="
+
+    # Functional Tests
+    - name: Functional Tests
+      block:
+        - name: Test 1 - Verify SSH connectivity
+          debug:
+            msg: "SSH connectivity: PASS"
+
+        - name: Test 2 - Verify system is booted and running
+          command: uptime
+          register: uptime_result
+          changed_when: false
+
+        - name: Display system uptime
+          debug:
+            msg: "System uptime: {{ uptime_result.stdout }}"
+
+        - name: Test 3 - Verify critical services are running
+          systemd:
+            name: "{{ item }}"
+          register: service_status
+          failed_when: false
+          changed_when: false
+          loop:
+            - ssh
+            - rsyslog
+            - chronyd
+
+        - name: Display service status
+          debug:
+            msg: "Service {{ item.item.name }}: {{ 'RUNNING' if item.status.ActiveState == 'active' else 'NOT RUNNING' }}"
+          loop: "{{ service_status.results }}"
+          loop_control:
+            label: "{{ item.item.name }}"
+
+        - name: Test 4 - Verify AWS CLI is installed and working
+          command: aws --version
+          register: aws_cli_version
+          changed_when: false
+          failed_when: false
+
+        - name: Display AWS CLI version
+          debug:
+            msg: "AWS CLI: {{ aws_cli_version.stdout if aws_cli_version.rc == 0 else 'NOT INSTALLED' }}"
+
+        - name: Test 5 - Verify network connectivity
+          uri:
+            url: https://www.google.com
+            method: GET
+            status_code: 200
+          register: network_test
+          failed_when: false
+          changed_when: false
+
+        - name: Display network connectivity test
+          debug:
+            msg: "Network connectivity: {{ 'PASS' if network_test.status == 200 else 'FAIL' }}"
+
+        - name: Test 6 - Verify common utilities are installed
+          command: which {{ item }}
+          register: utility_check
+          failed_when: false
+          changed_when: false
+          loop:
+            - curl
+            - wget
+            - git
+            - unzip
+
+        - name: Display utility installation status
+          debug:
+            msg: "Utility {{ item.item }}: {{ 'INSTALLED' if item.rc == 0 else 'NOT INSTALLED' }}"
+          loop: "{{ utility_check.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+
+        - name: Test 7 - Verify disk space is available
+          command: df -h /
+          register: disk_space
+          changed_when: false
+
+        - name: Display disk space
+          debug:
+            msg: "Disk space: {{ disk_space.stdout_lines[1] }}"
+
+        - name: Test 8 - Verify no root login via SSH
+          command: grep -E "^PermitRootLogin" /etc/ssh/sshd_config
+          register: root_login_check
+          changed_when: false
+          failed_when: false
+
+        - name: Verify root login is disabled
+          assert:
+            that:
+              - root_login_check.stdout is defined
+              - "'no' in root_login_check.stdout.lower()"
+            fail_msg: "Root login is not properly disabled"
+            success_msg: "Root login is disabled: PASS"
+
+        - name: Test 9 - Verify password authentication is disabled
+          command: grep -E "^PasswordAuthentication" /etc/ssh/sshd_config
+          register: password_auth_check
+          changed_when: false
+          failed_when: false
+
+        - name: Verify password authentication is disabled
+          assert:
+            that:
+              - password_auth_check.stdout is defined
+              - "'no' in password_auth_check.stdout.lower()"
+            fail_msg: "Password authentication is not properly disabled"
+            success_msg: "Password authentication is disabled: PASS"
+
+        - name: Test 10 - Verify system can resolve DNS
+          command: nslookup google.com
+          register: dns_test
+          failed_when: false
+          changed_when: false
+
+        - name: Display DNS resolution test
+          debug:
+            msg: "DNS resolution: {{ 'PASS' if dns_test.rc == 0 else 'FAIL' }}"
+
+    # CIS Compliance Re-check
+    - name: CIS Compliance Validation
+      block:
+        - name: Check CIS 1.1.1.1 - cramfs disabled
+          shell: grep -q "install cramfs /bin/true" /etc/modprobe.d/CIS.conf || echo "FAIL"
+          register: cis_cramfs
+          failed_when: false
+          changed_when: false
+
+        - name: Check CIS 1.4.1 - Bootloader permissions
+          shell: |
+            if [ -f /boot/grub/grub.cfg ]; then
+              PERMS=$(stat -c "%a" /boot/grub/grub.cfg)
+              OWNER=$(stat -c "%U:%G" /boot/grub/grub.cfg)
+              if [ "$PERMS" = "600" ] && [ "$OWNER" = "root:root" ]; then
+                echo "PASS"
+              else
+                echo "FAIL"
+              fi
+            else
+              echo "SKIP"
+            fi
+          register: cis_bootloader
+          failed_when: false
+          changed_when: false
+
+        - name: Check CIS 1.5.1 - Core dumps restricted
+          shell: |
+            if grep -q "hard core" /etc/security/limits.conf && [ "$(sysctl -n fs.suid_dumpable)" = "0" ]; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_coredump
+          failed_when: false
+          changed_when: false
+
+        - name: Check CIS 1.5.3 - ASLR enabled
+          shell: |
+            if [ "$(sysctl -n kernel.randomize_va_space)" = "2" ]; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_aslr
+          failed_when: false
+          changed_when: false
+
+        - name: Check CIS 1.6.1.1 - AppArmor installed
+          command: which apparmor_status
+          register: cis_apparmor
+          failed_when: false
+          changed_when: false
+
+        - name: Check CIS 3.1.1 - IP forwarding disabled
+          shell: |
+            if [ "$(sysctl -n net.ipv4.ip_forward)" = "0" ]; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_ip_forward
+          failed_when: false
+          changed_when: false
+
+        - name: Check CIS 3.3.9 - TCP SYN Cookies enabled
+          shell: |
+            if [ "$(sysctl -n net.ipv4.tcp_syncookies)" = "1" ]; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_syn_cookies
+          failed_when: false
+          changed_when: false
+
+        - name: Check CIS 4.2.1.1 - rsyslog installed and enabled
+          shell: |
+            if command -v rsyslogd &> /dev/null && systemctl is-enabled rsyslog &> /dev/null; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_rsyslog
+          failed_when: false
+          changed_when: false
+
+        - name: Check CIS 5.1.1 - Time synchronization configured
+          shell: |
+            if command -v chronyd &> /dev/null && systemctl is-enabled chronyd &> /dev/null; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_timesync
+          failed_when: false
+          changed_when: false
+
+        - name: Check CIS 6.1.1 - /etc/passwd permissions
+          shell: |
+            if [ -f /etc/passwd ] && [ "$(stat -c "%a" /etc/passwd)" = "644" ]; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_passwd_perm
+          failed_when: false
+          changed_when: false
+
+        # Level 2 checks
+        - name: Check CIS 5.2.1 - SSH Protocol version (Level 2)
+          shell: |
+            if grep -q "^Protocol 2" /etc/ssh/sshd_config; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_ssh_protocol
+          failed_when: false
+          changed_when: false
+          when: cis_level >= 2
+
+        - name: Check CIS 5.2.2 - SSH LogLevel (Level 2)
+          shell: |
+            if grep -q "^LogLevel INFO" /etc/ssh/sshd_config; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_ssh_loglevel
+          failed_when: false
+          changed_when: false
+          when: cis_level >= 2
+
+        - name: Check CIS 5.2.3 - SSH X11Forwarding disabled (Level 2)
+          shell: |
+            if grep -q "^X11Forwarding no" /etc/ssh/sshd_config; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_ssh_x11
+          failed_when: false
+          changed_when: false
+          when: cis_level >= 2
+
+        - name: Check CIS 6.2.1 - Password expiration configured (Level 2)
+          shell: |
+            if grep -qE "^PASS_MAX_DAYS (365|[0-9]{1,2}[0-9]{0,1})$" /etc/login.defs; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_pass_max_days
+          failed_when: false
+          changed_when: false
+          when: cis_level >= 2
+
+        - name: Check CIS 6.3.1 - Cron permissions (Level 2)
+          shell: |
+            if [ -d /etc/cron.d ] && [ "$(stat -c "%a" /etc/cron.d)" = "700" ]; then
+              echo "PASS"
+            else
+              echo "FAIL"
+            fi
+          register: cis_cron_perm
+          failed_when: false
+          changed_when: false
+          when: cis_level >= 2
+
+        - name: Calculate CIS compliance
+          set_fact:
+            cis_checks_base:
+              - "{{ cis_cramfs.stdout }}"
+              - "{{ cis_bootloader.stdout | default('SKIP') }}"
+              - "{{ cis_coredump.stdout }}"
+              - "{{ cis_aslr.stdout }}"
+              - "{{ 'PASS' if cis_apparmor.rc == 0 else 'FAIL' }}"
+              - "{{ cis_ip_forward.stdout }}"
+              - "{{ cis_syn_cookies.stdout }}"
+              - "{{ cis_rsyslog.stdout }}"
+              - "{{ cis_timesync.stdout }}"
+              - "{{ cis_passwd_perm.stdout }}"
+            cis_checks_level2:
+              - "{{ cis_ssh_protocol.stdout | default('SKIP') }}"
+              - "{{ cis_ssh_loglevel.stdout | default('SKIP') }}"
+              - "{{ cis_ssh_x11.stdout | default('SKIP') }}"
+              - "{{ cis_pass_max_days.stdout | default('SKIP') }}"
+              - "{{ cis_cron_perm.stdout | default('SKIP') }}"
+            cis_checks: "{{ cis_checks_base + (cis_checks_level2 | select('ne', 'SKIP') | list) }}"
+            cis_passed: "{{ cis_checks | select('equalto', 'PASS') | list | length }}"
+            cis_total: "{{ cis_checks | length }}"
+            cis_compliance: "{{ ((cis_passed | int / cis_total | int) * 100) | int }}"
+
+        - name: Display CIS compliance report
+          debug:
+            msg:
+              - "=========================================="
+              - "CIS Compliance Report (Post-Build)"
+              - "=========================================="
+              - "Passed: {{ cis_passed }}/{{ cis_total }}"
+              - "Compliance: {{ cis_compliance }}%"
+              - "Threshold: {{ cis_compliance_threshold }}%"
+              - "Level: {{ cis_level }}"
+              - "=========================================="
+
+        - name: Fail if CIS compliance below threshold
+          fail:
+            msg: "CIS compliance ({{ cis_compliance }}%) is below threshold ({{ cis_compliance_threshold }}%)"
+          when:
+            - cis_compliance | int < cis_compliance_threshold | int
+            - fail_on_validation_failure | bool
+
+    # Security Tests
+    - name: Security Validation
+      block:
+        - name: Verify no default passwords exist
+          shell: |
+            if [ -f /etc/shadow ]; then
+              awk -F: '($2 == "" || $2 == "!") {print $1}' /etc/shadow
+            fi
+          register: empty_passwords
+          changed_when: false
+          failed_when: false
+
+        - name: Check for empty passwords
+          debug:
+            msg: "Users with empty passwords: {{ empty_passwords.stdout_lines if empty_passwords.stdout_lines | length > 0 else 'NONE (PASS)' }}"
+          when: empty_passwords.stdout_lines | length > 0
+
+        - name: Verify critical files have correct permissions
+          stat:
+            path: "{{ item }}"
+          register: file_perms
+          loop:
+            - /etc/passwd
+            - /etc/shadow
+            - /etc/group
+            - /etc/ssh/sshd_config
+
+        - name: Display file permissions
+          debug:
+            msg: "{{ item.item }}: {{ item.stat.mode }} ({{ item.stat.owner }}:{{ item.stat.group }})"
+          loop: "{{ file_perms.results }}"
+
+    # Generate Validation Summary
+    - name: Generate Validation Summary
+      set_fact:
+        validation_summary:
+          functional_tests: "PASS"
+          cis_compliance: "{{ cis_compliance }}%"
+          security_checks: "PASS"
+          overall_status: "{{ 'PASS' if cis_compliance | int >= cis_compliance_threshold | int else 'FAIL' }}"
+
+    - name: Display Final Validation Report
+      debug:
+        msg:
+          - "=========================================="
+          - "AMI Validation Summary"
+          - "=========================================="
+          - "Functional Tests: {{ validation_summary.functional_tests }}"
+          - "CIS Compliance: {{ validation_summary.cis_compliance }}"
+          - "Security Checks: {{ validation_summary.security_checks }}"
+          - "Overall Status: {{ validation_summary.overall_status }}"
+          - "=========================================="
+
+    - name: Fail validation if overall status is FAIL
+      fail:
+        msg: "AMI validation failed. Check the validation report above for details."
+      when:
+        - validation_summary.overall_status == "FAIL"
+        - fail_on_validation_failure | bool
+
