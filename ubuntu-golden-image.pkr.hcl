@@ -124,9 +124,21 @@ build {
   # Provisioning: Update system
   provisioner "shell" {
     inline = [
-      "sudo apt-get update",
-      "sudo apt-get upgrade -y",
+      "# Wait for cloud-init to complete",
+      "sudo cloud-init status --wait || true",
+      "# Ensure apt lists directory exists",
+      "sudo mkdir -p /var/lib/apt/lists/partial",
+      "sudo mkdir -p /var/lib/apt/lists/auxfiles",
+      "# Clean apt cache to avoid corruption issues",
+      "sudo apt-get clean",
+      "sudo rm -rf /var/lib/apt/lists/*",
+      "# Update package lists with retry",
+      "for i in 1 2 3; do sudo apt-get update && break || sleep 10; done",
+      "# Upgrade system packages",
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold'",
+      "# Install required packages",
       "sudo apt-get install -y software-properties-common python3 python3-pip",
+      "# Cleanup",
       "sudo apt-get autoremove -y",
       "sudo apt-get autoclean -y"
     ]
