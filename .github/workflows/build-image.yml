@@ -303,17 +303,36 @@ jobs:
           echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
           echo "Security group created: $SG_ID"
 
+      - name: Create temporary SSH key pair
+        id: create-keypair
+        run: |
+          KEY_NAME="packer-validation-$(date +%s)"
+          
+          # Create key pair in AWS
+          aws ec2 create-key-pair \
+            --key-name "$KEY_NAME" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'KeyMaterial' \
+            --output text > /tmp/validation_key.pem
+          
+          chmod 600 /tmp/validation_key.pem
+          
+          echo "key_name=$KEY_NAME" >> $GITHUB_OUTPUT
+          echo "Key pair created: $KEY_NAME"
+
       - name: Launch test instance
         id: launch-instance
         run: |
           AMI_ID="${{ needs.build.outputs.ami_id }}"
           SG_ID="${{ steps.create-sg.outputs.sg_id }}"
+          KEY_NAME="${{ steps.create-keypair.outputs.key_name }}"
           INSTANCE_NAME="ami-validation-$(date +%Y%m%d-%H%M%S)"
           
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
             --instance-type t3.micro \
             --security-group-ids "$SG_ID" \
+            --key-name "$KEY_NAME" \
             --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Purpose,Value=AMI-Validation},{Key=Build,Value=${{ github.run_id }}}]" \
             --region ${{ env.PKR_VAR_aws_region }} \
             --query 'Instances[0].InstanceId' \
@@ -368,7 +387,8 @@ jobs:
           RETRY=0
           MAX_RETRIES=30
           while [ $RETRY -lt $MAX_RETRIES ]; do
-            if ssh -o StrictHostKeyChecking=no \
+            if ssh -i /tmp/validation_key.pem \
+                -o StrictHostKeyChecking=no \
                 -o ConnectTimeout=5 \
                 -o UserKnownHostsFile=/dev/null \
                 -o BatchMode=yes \
@@ -391,7 +411,8 @@ jobs:
           
           # Copy public key to instance (using existing SSH access)
           PUBLIC_IP="${{ steps.get-ip.outputs.public_ip }}"
-          ssh -o StrictHostKeyChecking=no \
+          ssh -i /tmp/validation_key.pem \
+              -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null \
               ubuntu@"$PUBLIC_IP" \
               "echo '$(cat /tmp/ansible_key.pub)' >> ~/.ssh/authorized_keys" || true
@@ -449,6 +470,17 @@ jobs:
             echo "Deleting security group: $SG_ID"
             aws ec2 delete-security-group \
               --group-id "$SG_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} || true
+          fi
+
+      - name: Cleanup - Delete key pair
+        if: always()
+        run: |
+          KEY_NAME="${{ steps.create-keypair.outputs.key_name }}"
+          if [ -n "$KEY_NAME" ]; then
+            echo "Deleting key pair: $KEY_NAME"
+            aws ec2 delete-key-pair \
+              --key-name "$KEY_NAME" \
               --region ${{ env.PKR_VAR_aws_region }} || true
           fi
 
