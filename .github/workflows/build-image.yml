@@ -404,26 +404,13 @@ jobs:
           echo "ERROR: SSH not available after $MAX_RETRIES attempts"
           exit 1
 
-      - name: Setup SSH key for Ansible
-        run: |
-          # Generate temporary SSH key for Ansible
-          ssh-keygen -t rsa -b 4096 -f /tmp/ansible_key -N "" -q
-          
-          # Copy public key to instance (using existing SSH access)
-          PUBLIC_IP="${{ steps.get-ip.outputs.public_ip }}"
-          ssh -i /tmp/validation_key.pem \
-              -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=/dev/null \
-              ubuntu@"$PUBLIC_IP" \
-              "echo '$(cat /tmp/ansible_key.pub)' >> ~/.ssh/authorized_keys" || true
-
       - name: Run AMI validation tests
         id: validate
         run: |
           PUBLIC_IP="${{ steps.get-ip.outputs.public_ip }}"
           
           export ANSIBLE_HOST_KEY_CHECKING=False
-          export ANSIBLE_SSH_PRIVATE_KEY_FILE=/tmp/ansible_key
+          export ANSIBLE_SSH_PRIVATE_KEY_FILE=/tmp/validation_key.pem
           
           ansible-playbook \
             -i "$PUBLIC_IP," \
