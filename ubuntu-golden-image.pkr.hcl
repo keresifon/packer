@@ -179,8 +179,8 @@ build {
   # Provisioning: Copy Ansible directory to remote instance
   # This ensures all task files, vars, and playbooks are available
   provisioner "file" {
-    source      = "ansible/"
-    destination = "/tmp/ansible/"
+    source      = "ansible"
+    destination = "/tmp"
   }
 
   # Provisioning: CIS Benchmark Hardening with Ansible
