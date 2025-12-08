@@ -114,7 +114,7 @@
             state: absent
             params: install /bin/true
           ignore_errors: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Blacklist freevxfs (Level 2)
           lineinfile:
@@ -122,7 +122,7 @@
             line: "install freevxfs /bin/true"
             create: yes
             state: present
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Disable jffs2 filesystem (Level 2)
           modprobe:
@@ -130,7 +130,7 @@
             state: absent
             params: install /bin/true
           ignore_errors: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Blacklist jffs2 (Level 2)
           lineinfile:
@@ -138,7 +138,7 @@
             line: "install jffs2 /bin/true"
             create: yes
             state: present
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Disable hfs filesystem (Level 2)
           modprobe:
@@ -146,7 +146,7 @@
             state: absent
             params: install /bin/true
           ignore_errors: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Blacklist hfs (Level 2)
           lineinfile:
@@ -154,7 +154,7 @@
             line: "install hfs /bin/true"
             create: yes
             state: present
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Disable hfsplus filesystem (Level 2)
           modprobe:
@@ -162,7 +162,7 @@
             state: absent
             params: install /bin/true
           ignore_errors: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Blacklist hfsplus (Level 2)
           lineinfile:
@@ -170,7 +170,7 @@
             line: "install hfsplus /bin/true"
             create: yes
             state: present
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: CIS 1.4 - Secure Boot Settings
       block:
@@ -215,7 +215,7 @@
             state: present
             sysctl_set: yes
             reload: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Enable kernel unprivileged bpf disabled (Level 2)
           sysctl:
@@ -224,7 +224,7 @@
             state: present
             sysctl_set: yes
             reload: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: CIS 1.6 - Mandatory Access Control
       block:
@@ -274,7 +274,7 @@
               file-db:/usr/share/gdm/greeter-dconf-defaults
             create: yes
             marker: "# {mark} ANSIBLE MANAGED BLOCK"
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
           ignore_errors: yes
 
     - name: CIS 2.1 - Services
@@ -321,43 +321,43 @@
           apt:
             name: rpcbind
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove Avahi server (Level 2)
           apt:
             name: avahi-daemon
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove CUPS (Level 2)
           apt:
             name: cups
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove DHCP server (Level 2)
           apt:
             name: isc-dhcp-server
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove DNS server (Level 2)
           apt:
             name: bind9
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove FTP server (Level 2)
           apt:
             name: vsftpd
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove HTTP server (Level 2)
           apt:
             name: apache2
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove IMAP and POP3 server (Level 2)
           apt:
@@ -365,43 +365,43 @@
               - dovecot-imapd
               - dovecot-pop3d
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove Samba (Level 2)
           apt:
             name: samba
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove HTTP proxy server (Level 2)
           apt:
             name: squid
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove SNMP server (Level 2)
           apt:
             name: snmpd
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove NIS server (Level 2)
           apt:
             name: nis
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove rsh server (Level 2)
           apt:
             name: rsh-server
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Remove rsync server (Level 2)
           apt:
             name: rsync
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: CIS 3.1 - Network Parameters
       block:
@@ -473,7 +473,7 @@
           loop:
             - net.ipv4.conf.all.rp_filter
             - net.ipv4.conf.default.rp_filter
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Disable IPv6 if not needed (Level 2)
           sysctl:
@@ -482,7 +482,7 @@
             state: present
             sysctl_set: yes
             reload: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
           # Note: Comment out if IPv6 is required
 
         - name: Enable TCP timestamps (Level 2)
@@ -492,7 +492,7 @@
             state: present
             sysctl_set: yes
             reload: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Enable ICMP echo ignore broadcasts (Level 2)
           sysctl:
@@ -501,7 +501,7 @@
             state: present
             sysctl_set: yes
             reload: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Enable ICMP ignore bogus error responses (Level 2)
           sysctl:
@@ -510,7 +510,7 @@
             state: present
             sysctl_set: yes
             reload: yes
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Enable log martians (Level 2)
           sysctl:
@@ -522,7 +522,7 @@
           loop:
             - net.ipv4.conf.all.log_martians
             - net.ipv4.conf.default.log_martians
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: CIS 4.1 - Configure Logging
       block:
@@ -546,7 +546,7 @@
               # Uncomment and configure if remote logging is required
               # *.* @@loghost.example.com
             marker: "# {mark} ANSIBLE MANAGED BLOCK - CIS Level 2"
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
           # Note: Configure actual log host as needed
 
         - name: Ensure rsyslog default file permissions configured (Level 2)
@@ -555,21 +555,21 @@
             regexp: '^\$FileCreateMode'
             line: '$FileCreateMode 0640'
             insertafter: '^#\$FileCreateMode'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Configure journald to forward to rsyslog (Level 2)
           lineinfile:
             path: /etc/systemd/journald.conf
             regexp: '^#?ForwardToSyslog='
             line: 'ForwardToSyslog=yes'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Configure journald to store logs persistently (Level 2)
           lineinfile:
             path: /etc/systemd/journald.conf
             regexp: '^#?Storage='
             line: 'Storage=persistent'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: CIS 5.1 - Configure Time Synchronization
       block:
@@ -647,105 +647,105 @@
             path: /etc/ssh/sshd_config
             regexp: '^#?Protocol'
             line: 'Protocol 2'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH LogLevel is set to INFO (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?LogLevel'
             line: 'LogLevel INFO'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH X11 forwarding is disabled (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?X11Forwarding'
             line: 'X11Forwarding no'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH MaxAuthTries is set to 4 or less (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?MaxAuthTries'
             line: 'MaxAuthTries 4'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH IgnoreRhosts is enabled (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?IgnoreRhosts'
             line: 'IgnoreRhosts yes'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH HostbasedAuthentication is disabled (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?HostbasedAuthentication'
             line: 'HostbasedAuthentication no'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH root login is disabled (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?PermitRootLogin'
             line: 'PermitRootLogin no'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH PermitEmptyPasswords is disabled (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?PermitEmptyPasswords'
             line: 'PermitEmptyPasswords no'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH PermitUserEnvironment is disabled (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?PermitUserEnvironment'
             line: 'PermitUserEnvironment no'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure only approved MAC algorithms are used (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?MACs'
             line: 'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure only approved ciphers are used (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?Ciphers'
             line: 'Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure only approved key exchange algorithms are used (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?KexAlgorithms'
             line: 'KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group14-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH Idle Timeout Interval is configured (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?ClientAliveInterval'
             line: 'ClientAliveInterval 300'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH ClientAliveCountMax is set (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?ClientAliveCountMax'
             line: 'ClientAliveCountMax 0'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH LoginGraceTime is set to one minute or less (Level 2)
           lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?LoginGraceTime'
             line: 'LoginGraceTime 60'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure SSH access is limited (Level 2)
           lineinfile:
@@ -753,14 +753,14 @@
             regexp: '^#?AllowUsers'
             line: '# AllowUsers user1 user2'
             insertafter: '^# Example of overriding settings'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
           # Note: Configure actual allowed users as needed
 
         - name: Restart SSH service after configuration changes
           systemd:
             name: sshd
             state: restarted
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
     # Level 2: Additional file permissions and access controls
     - name: CIS 6.2 - User and Group Settings (Level 2)
@@ -770,41 +770,41 @@
             path: /etc/login.defs
             regexp: '^PASS_MAX_DAYS'
             line: 'PASS_MAX_DAYS 365'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure minimum days between password changes is 7 (Level 2)
           lineinfile:
             path: /etc/login.defs
             regexp: '^PASS_MIN_DAYS'
             line: 'PASS_MIN_DAYS 7'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure password expiration warning days is 7 (Level 2)
           lineinfile:
             path: /etc/login.defs
             regexp: '^PASS_WARN_AGE'
             line: 'PASS_WARN_AGE 7'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure inactive password lock is 30 days or less (Level 2)
           lineinfile:
             path: /etc/default/useradd
             regexp: '^INACTIVE='
             line: 'INACTIVE=30'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure default group for the root account is GID 0 (Level 2)
           user:
             name: root
             group: root
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure default user umask is 027 or more restrictive (Level 2)
           lineinfile:
             path: /etc/login.defs
             regexp: '^UMASK'
             line: 'UMASK 027'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure default user shell timeout is configured (Level 2)
           lineinfile:
@@ -812,7 +812,7 @@
             regexp: '^TMOUT='
             line: 'TMOUT=600'
             insertafter: '^# If not running interactively'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure default user shell timeout is configured in profile (Level 2)
           lineinfile:
@@ -820,7 +820,7 @@
             regexp: '^TMOUT='
             line: 'TMOUT=600'
             insertafter: '^# If not running interactively'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
     # Level 2: Additional system maintenance
     - name: CIS 6.3 - System Maintenance (Level 2)
@@ -832,13 +832,13 @@
             group: root
             mode: '0600'
             state: touch
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure /etc/cron.deny does not exist (Level 2)
           file:
             path: /etc/cron.deny
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure permissions on /etc/cron.d are configured (Level 2)
           file:
@@ -846,7 +846,7 @@
             owner: root
             group: root
             mode: '0700'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure permissions on /etc/cron.daily are configured (Level 2)
           file:
@@ -854,7 +854,7 @@
             owner: root
             group: root
             mode: '0700'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure permissions on /etc/cron.hourly are configured (Level 2)
           file:
@@ -862,7 +862,7 @@
             owner: root
             group: root
             mode: '0700'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure permissions on /etc/cron.monthly are configured (Level 2)
           file:
@@ -870,7 +870,7 @@
             owner: root
             group: root
             mode: '0700'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure permissions on /etc/cron.weekly are configured (Level 2)
           file:
@@ -878,7 +878,7 @@
             owner: root
             group: root
             mode: '0700'
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure at/cron is restricted to authorized users (Level 2)
           file:
@@ -887,13 +887,13 @@
             group: root
             mode: '0600'
             state: touch
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
         - name: Ensure /etc/at.deny does not exist (Level 2)
           file:
             path: /etc/at.deny
             state: absent
-          when: cis_level >= 2
+          when: (cis_level | default(cis_level_default) | int) >= 2
 
   post_tasks:
     - name: Display CIS hardening completion message
