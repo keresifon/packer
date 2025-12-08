@@ -261,12 +261,15 @@ jobs:
           sudo apt-get install -y python3-pip
           pip3 install ansible
 
-      - name: Install AWS CLI
+      - name: Verify AWS CLI is available
         run: |
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-          unzip -q awscliv2.zip
-          sudo ./aws/install
-          rm -rf aws awscliv2.zip
+          # GitHub Actions runners already have AWS CLI v2 pre-installed
+          aws --version || (echo "AWS CLI not found, installing..." && \
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+            unzip -q awscliv2.zip && \
+            sudo ./aws/install --update && \
+            rm -rf aws awscliv2.zip)
+          aws --version
 
       - name: Wait for AMI to be available
         run: |
@@ -482,13 +485,16 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.PKR_VAR_aws_region }}
 
-      - name: Install AWS CLI, jq, and PyYAML
+      - name: Verify AWS CLI and install dependencies
         run: |
-          # Install AWS CLI
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-          unzip -q awscliv2.zip
-          sudo ./aws/install
-          rm -rf aws awscliv2.zip
+          # GitHub Actions runners already have AWS CLI v2 pre-installed
+          # Verify it's available, only install if missing
+          aws --version || (echo "AWS CLI not found, installing..." && \
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+            unzip -q awscliv2.zip && \
+            sudo ./aws/install --update && \
+            rm -rf aws awscliv2.zip)
+          aws --version
           
           # Install jq and PyYAML (for YAML parsing)
           sudo apt-get update

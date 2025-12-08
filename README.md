@@ -386,7 +386,7 @@ resource "aws_instance" "example" {
 }
 ```
 
-See [AMI-DISTRIBUTION.md](AMI-DISTRIBUTION.md) for detailed information about multi-region distribution.
+See [AMI-DISTRIBUTION.md](docs/AMI-DISTRIBUTION.md) for detailed information about multi-region distribution.
 
 ## Workflow Details
 
@@ -723,13 +723,28 @@ packer/
 │   └── workflows/
 │       └── build-image.yml          # GitHub Actions CI/CD workflow
 ├── .gitignore                        # Git ignore rules
-├── README-NO-HCP.md                 # This file
-├── README.md                        # HCP Packer version documentation
-├── LOCAL_BUILD.md                   # Local build guide (WSL Ubuntu)
-├── QUICKSTART.md                    # Quick start guide
-├── REPOSITORY_STRUCTURE.md          # Repository overview
-├── ubuntu-golden-image.pkr.hcl      # Main Packer template (no HCP)
-├── ubuntu-golden-image-local.pkr.hcl # Local build template
+├── README.md                         # Main project documentation
+├── docs/                             # Documentation
+│   ├── AMI-DISTRIBUTION.md           # AMI distribution guide
+│   ├── CIS-IMPLEMENTATION-COMPARISON.md  # CIS implementation comparison
+│   ├── LOCAL_BUILD.md                # Local build guide (WSL Ubuntu)
+│   ├── PIPELINE-TIMING.md            # Pipeline timing documentation
+│   └── VALIDATION.md                 # Validation documentation
+├── ansible/                          # Ansible playbooks and tasks
+│   ├── cis-hardening-playbook.yml    # Main CIS hardening playbook
+│   ├── cis-compliance-check.yml     # CIS compliance check playbook
+│   ├── ami-validation-playbook.yml  # AMI validation playbook
+│   ├── tasks/                        # Modular task files
+│   │   ├── cis/                      # CIS hardening tasks
+│   │   ├── compliance/               # Compliance check tasks
+│   │   ├── validation/               # Validation test tasks
+│   │   └── common/                   # Common reusable tasks
+│   └── vars/                         # Variable files
+├── config/                           # Configuration files
+│   ├── regions.yml                   # Target regions configuration
+│   └── README.md                     # Config documentation
+├── ubuntu-golden-image.pkr.hcl      # Main Packer template
+├── ubuntu-golden-image-ansible.pkr.hcl  # Alternative Ansible template
 └── variables.example.pkrvars.hcl    # Example variables (for reference)
 ```
 
@@ -744,7 +759,7 @@ packer/
 
 ## Local Development
 
-For local builds without GitHub Actions, see [LOCAL_BUILD.md](LOCAL_BUILD.md) for detailed instructions on building images locally using Packer CLI.
+For local builds without GitHub Actions, see [LOCAL_BUILD.md](docs/LOCAL_BUILD.md) for detailed instructions on building images locally using Packer CLI.
 
 ## Resources
 

@@ -1,0 +1,14 @@
+---
+# CIS 5.1 Compliance Checks - Time Synchronization
+
+- name: Check CIS 5.1.1 - Time synchronization configured
+  shell: |
+    if command -v chronyd &> /dev/null && systemctl is-enabled chronyd &> /dev/null; then
+      echo "PASS"
+    else
+      echo "FAIL"
+    fi
+  register: timesync_check
+  failed_when: false
+  changed_when: false
+

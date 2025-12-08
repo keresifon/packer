@@ -1,0 +1,33 @@
+---
+# CIS 1.7 - Command Line Warning Banners
+# Configures login warning banners
+
+- name: Configure local login warning banner
+  copy:
+    content: "Authorized uses only. All activity may be monitored and reported.\n"
+    dest: /etc/issue
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Configure remote login warning banner
+  copy:
+    content: "Authorized uses only. All activity may be monitored and reported.\n"
+    dest: /etc/issue.net
+    owner: root
+    group: root
+    mode: '0644'
+
+# Level 2: Additional banner requirements
+- name: Ensure GDM login banner is configured (Level 2)
+  blockinfile:
+    path: /etc/dconf/profile/gdm
+    block: |
+      user-db:user
+      system-db:gdm
+      file-db:/usr/share/gdm/greeter-dconf-defaults
+    create: yes
+    marker: "# {mark} ANSIBLE MANAGED BLOCK"
+  when: (cis_level | default(cis_level_default) | int) >= 2
+  ignore_errors: yes
+

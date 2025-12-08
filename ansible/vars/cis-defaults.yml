@@ -1,0 +1,17 @@
+---
+# CIS Ubuntu 22.04 LTS Benchmark Default Variables
+# These variables can be overridden when calling the playbook
+
+# CIS Benchmark Level (1 = Level 1, 2 = Level 2)
+cis_level_default: 2
+
+# Skip specific CIS sections if needed (empty list = apply all)
+# Example: ['1.1', '2.2'] to skip filesystem and special services
+cis_skip_sections: []
+
+# Compliance threshold (fail build if below this percentage)
+cis_compliance_threshold: 80
+
+# Fail build on non-compliance (true/false)
+fail_build_on_non_compliance: false
+

@@ -1,0 +1,9 @@
+---
+# CIS 1.6 Compliance Checks - Mandatory Access Control
+
+- name: Check CIS 1.6.1.1 - AppArmor installed
+  command: which apparmor_status
+  register: apparmor_check
+  failed_when: false
+  changed_when: false
+
