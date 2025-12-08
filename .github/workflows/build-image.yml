@@ -612,8 +612,8 @@ jobs:
             exit 0
           fi
           
-          # Convert comma-separated regions to JSON array
-          REGIONS_JSON=$(echo "$REGIONS_INPUT" | tr ',' '\n' | jq -R . | jq -s .)
+          # Convert comma-separated regions to JSON array (compact format for GitHub output)
+          REGIONS_JSON=$(echo "$REGIONS_INPUT" | tr ',' '\n' | jq -R . | jq -sc .)
           echo "regions_json=$REGIONS_JSON" >> $GITHUB_OUTPUT
           echo "Target regions: $REGIONS_INPUT"
 
