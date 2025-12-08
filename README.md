@@ -62,6 +62,9 @@ This project provides a fully automated pipeline for building Ubuntu golden imag
 │       - Update system packages                              │
 │       - Install common utilities                            │
 │       - Install AWS CLI v2                                  │
+│       - Install Ansible                                     │
+│       - Apply CIS benchmark hardening (via Ansible)         │
+│       - Run CIS compliance check                            │
 │       - Harden SSH configuration                            │
 │       - Clean up temporary files                            │
 │    d) Create AMI snapshot                                   │
@@ -727,7 +730,6 @@ packer/
 ├── docs/                             # Documentation
 │   ├── AMI-DISTRIBUTION.md           # AMI distribution guide
 │   ├── CIS-IMPLEMENTATION-COMPARISON.md  # CIS implementation comparison
-│   ├── LOCAL_BUILD.md                # Local build guide (WSL Ubuntu)
 │   ├── PIPELINE-TIMING.md            # Pipeline timing documentation
 │   └── VALIDATION.md                 # Validation documentation
 ├── ansible/                          # Ansible playbooks and tasks
@@ -744,7 +746,6 @@ packer/
 │   ├── regions.yml                   # Target regions configuration
 │   └── README.md                     # Config documentation
 ├── ubuntu-golden-image.pkr.hcl      # Main Packer template
-├── ubuntu-golden-image-ansible.pkr.hcl  # Alternative Ansible template
 └── variables.example.pkrvars.hcl    # Example variables (for reference)
 ```
 
@@ -757,9 +758,6 @@ packer/
 5. After review and approval, merge to `no-hcp-packer`
 6. The workflow will automatically build the new AMI
 
-## Local Development
-
-For local builds without GitHub Actions, see [LOCAL_BUILD.md](docs/LOCAL_BUILD.md) for detailed instructions on building images locally using Packer CLI.
 
 ## Resources
 

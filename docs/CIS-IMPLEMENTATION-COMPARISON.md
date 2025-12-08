@@ -1,225 +1,196 @@
-# CIS Benchmark Implementation Approaches - Comparison
+# CIS Benchmark Implementation - Current Approach
 
-This document compares different approaches for implementing CIS benchmarks in Packer builds.
+This document describes the current Ansible-based implementation for applying CIS benchmarks in Packer builds.
 
-## Current Implementation: Shell Scripts
-
-### Overview
-The current implementation uses bash shell scripts (`scripts/cis-hardening.sh` and `scripts/cis-audit.sh`) to apply and validate CIS benchmarks.
-
-### Pros
-- ✅ **Simple**: No additional dependencies required
-- ✅ **Fast**: Direct execution, minimal overhead
-- ✅ **Lightweight**: Small footprint, quick to download
-- ✅ **Easy to understand**: Bash scripts are straightforward
-- ✅ **Works immediately**: No setup or configuration needed
-
-### Cons
-- ❌ **Harder to maintain**: Large shell scripts can become complex
-- ❌ **Less idempotent**: Scripts may not handle re-runs well
-- ❌ **Limited error handling**: Basic error handling compared to Ansible
-- ❌ **No role reusability**: Can't easily reuse across projects
-- ❌ **Manual testing**: Harder to test individual components
-
-### File Structure
-```
-scripts/
-├── cis-hardening.sh    # 346 lines of bash
-└── cis-audit.sh        # 189 lines of bash
-```
-
----
-
-## Alternative Implementation: Ansible
+## Current Implementation: Ansible
 
 ### Overview
-Ansible-based implementation using playbooks and roles for CIS hardening.
+The project uses Ansible playbooks and modular task files to apply and validate CIS Ubuntu 22.04 LTS benchmarks. This approach provides maintainability, idempotency, and structured compliance reporting.
 
-### Pros
-- ✅ **Maintainable**: Structured playbooks, easier to read and modify
-- ✅ **Idempotent**: Can run multiple times safely
-- ✅ **Reusable**: Roles can be shared across projects
-- ✅ **Better error handling**: Comprehensive error handling and reporting
-- ✅ **Testable**: Easy to test individual tasks
-- ✅ **Community roles**: Can use existing CIS roles from Ansible Galaxy
-- ✅ **Flexible**: Easy to enable/disable specific CIS sections
-- ✅ **Compliance reporting**: Better structured compliance reports
+### Architecture
 
-### Cons
-- ❌ **Requires Ansible**: Additional dependency to install
-- ❌ **Slightly slower**: More overhead than direct shell execution
-- ❌ **More complex setup**: Requires playbook structure and dependencies
-- ❌ **Learning curve**: Team needs Ansible knowledge
+The implementation consists of:
+
+1. **Main Playbooks**:
+   - `ansible/cis-hardening-playbook.yml` - Applies CIS benchmark hardening
+   - `ansible/cis-compliance-check.yml` - Validates compliance after hardening
+   - `ansible/ami-validation-playbook.yml` - Post-build validation tests
+
+2. **Modular Task Files** (`ansible/tasks/cis/`):
+   - Organized by CIS benchmark sections (1.1, 1.4, 1.5, etc.)
+   - Each section has its own task file for easy maintenance
+   - Tasks can be selectively enabled/disabled via `cis_skip_sections` variable
+
+3. **Compliance Tasks** (`ansible/tasks/compliance/`):
+   - Reusable compliance check tasks
+   - Calculates compliance percentage
+   - Provides structured reporting
 
 ### File Structure
+
 ```
 ansible/
-├── requirements.yml              # Ansible Galaxy dependencies
 ├── cis-hardening-playbook.yml    # Main hardening playbook
-└── cis-compliance-check.yml      # Compliance validation playbook
+├── cis-compliance-check.yml      # Compliance validation playbook
+├── ami-validation-playbook.yml   # Post-build validation
+├── requirements.yml              # Ansible Galaxy dependencies (if any)
+├── vars/
+│   └── cis-defaults.yml         # Default CIS configuration variables
+└── tasks/
+    ├── cis/                      # CIS hardening tasks (by section)
+    │   ├── 1.1-filesystem.yml
+    │   ├── 1.4-boot-settings.yml
+    │   ├── 1.5-process-hardening.yml
+    │   ├── 1.6-mac.yml
+    │   ├── 1.7-warning-banners.yml
+    │   ├── 2.1-services.yml
+    │   ├── 2.2-special-services.yml
+    │   ├── 3.1-network.yml
+    │   ├── 4.1-logging.yml
+    │   ├── 5.1-time-sync.yml
+    │   ├── 5.2-ssh.yml
+    │   ├── 6.1-file-permissions.yml
+    │   ├── 6.2-user-group.yml
+    │   └── 6.3-maintenance.yml
+    ├── compliance/               # Compliance check tasks
+    │   ├── calculate-compliance.yml
+    │   └── [section-specific checks]
+    ├── validation/               # Post-build validation tests
+    │   ├── functional-tests.yml
+    │   └── security-tests.yml
+    └── common/                   # Common reusable tasks
+        └── disable-filesystem.yml
 ```
 
----
+### Key Features
 
-## Comparison Matrix
+- ✅ **Modular Design**: Each CIS section is in its own task file
+- ✅ **Idempotent**: Can run multiple times safely
+- ✅ **Configurable**: CIS level (1 or 2) and compliance threshold configurable
+- ✅ **Selective Application**: Skip specific sections via `cis_skip_sections`
+- ✅ **Compliance Reporting**: Structured compliance percentage calculation
+- ✅ **Validation**: Post-build validation ensures AMI is functional and secure
 
-| Feature | Shell Scripts | Ansible |
-|---------|--------------|---------|
-| **Setup Complexity** | Low | Medium |
-| **Execution Speed** | Fast | Slightly slower |
-| **Maintainability** | Medium | High |
-| **Idempotency** | Limited | Full |
-| **Error Handling** | Basic | Advanced |
-| **Reusability** | Low | High |
-| **Testing** | Manual | Automated |
-| **Community Support** | Limited | Extensive |
-| **Dependencies** | None | Ansible + Python |
-| **Learning Curve** | Low | Medium |
+### Configuration
 
----
+CIS hardening is configured via variables in `ansible/vars/cis-defaults.yml`:
 
-## Recommended Approach
+```yaml
+cis_level_default: 2                    # CIS Benchmark Level (1 or 2)
+cis_skip_sections: []                   # Sections to skip (e.g., ['1.1', '2.2'])
+cis_compliance_threshold: 80            # Minimum compliance percentage
+fail_build_on_non_compliance: false     # Fail build if below threshold
+```
 
-### For Most Users: **Ansible**
+These can be overridden via Packer variables or workflow inputs.
 
-**Why?**
-1. **Better long-term maintainability** - Easier to update and modify
-2. **Idempotent** - Safe to re-run during troubleshooting
-3. **Community support** - Can leverage existing CIS roles
-4. **Better compliance reporting** - Structured output for audits
-5. **Flexibility** - Easy to customize which CIS sections to apply
+### How It Works
 
-### When to Use Shell Scripts
+1. **During Packer Build**:
+   - Ansible directory is copied to `/tmp/ansible` on the build instance
+   - `cis-hardening-playbook.yml` runs to apply CIS benchmarks
+   - `cis-compliance-check.yml` runs to validate compliance
+   - Build fails if compliance is below threshold (if enabled)
 
-Use shell scripts if:
-- You need the absolute fastest build time
-- You want zero dependencies
-- Your team is not familiar with Ansible
-- You have very simple, one-time hardening needs
+2. **Post-Build Validation**:
+   - GitHub Actions launches a test instance from the AMI
+   - `ami-validation-playbook.yml` runs functional and security tests
+   - Ensures AMI is bootable, secure, and functional
 
----
+### CIS Sections Implemented
 
-## Migration Path
+- **1.1** - Filesystem Configuration
+- **1.4** - Secure Boot Settings
+- **1.5** - Additional Process Hardening
+- **1.6** - Mandatory Access Control (AppArmor)
+- **1.7** - Command Line Warning Banners
+- **2.1** - Services (disable unnecessary services)
+- **2.2** - Special Purpose Services
+- **3.1** - Network Parameters
+- **4.1** - Configure Logging (rsyslog)
+- **5.1** - Configure Time Synchronization (chronyd)
+- **5.2** - SSH Server Configuration (Level 2)
+- **6.1** - System File Permissions
+- **6.2** - User and Group Settings (Level 2)
+- **6.3** - System Maintenance (Level 2)
 
-### Option 1: Keep Both (Recommended)
+### Benefits of Ansible Approach
 
-Maintain both implementations:
-- **Shell scripts** (`ubuntu-golden-image.pkr.hcl`) - For simplicity
-- **Ansible** (`ubuntu-golden-image-ansible.pkr.hcl`) - For advanced use cases
+- ✅ **Maintainable**: Structured playbooks, easier to read and modify
+- ✅ **Idempotent**: Can run multiple times safely
+- ✅ **Reusable**: Task files can be shared across projects
+- ✅ **Better error handling**: Comprehensive error handling and reporting
+- ✅ **Testable**: Easy to test individual tasks
+- ✅ **Flexible**: Easy to enable/disable specific CIS sections
+- ✅ **Compliance reporting**: Structured compliance reports with percentages
+- ✅ **CI/CD Integration**: Works seamlessly with GitHub Actions
 
-### Option 2: Migrate to Ansible
+### Usage in Packer Template
 
-1. Install Ansible plugin in Packer template
-2. Replace shell script provisioners with Ansible provisioners
-3. Test thoroughly
-4. Remove shell scripts once validated
+The Packer template (`ubuntu-golden-image.pkr.hcl`) uses shell provisioners to run Ansible:
 
-### Option 3: Hybrid Approach
-
-Use shell scripts for simple tasks, Ansible for CIS hardening:
-- Keep shell scripts for basic setup (package installation, etc.)
-- Use Ansible specifically for CIS hardening
-
----
-
-## Implementation Examples
-
-### Shell Script Approach (Current)
 ```hcl
+# Copy Ansible directory to remote instance
 provisioner "file" {
-  source      = "scripts/cis-hardening.sh"
-  destination = "/tmp/cis-hardening.sh"
+  source      = "ansible"
+  destination = "/tmp"
 }
 
+# Run CIS hardening
 provisioner "shell" {
   inline = [
-    "chmod +x /tmp/cis-hardening.sh",
-    "sudo /tmp/cis-hardening.sh"
+    "cd /tmp/ansible && ansible-playbook cis-hardening-playbook.yml -e cis_level=${var.cis_level} -e cis_compliance_threshold=${var.cis_compliance_threshold} -v -c local -i localhost,"
+  ]
+}
+
+# Run compliance check
+provisioner "shell" {
+  inline = [
+    "cd /tmp/ansible && ansible-playbook cis-compliance-check.yml -e cis_compliance_threshold=${var.cis_compliance_threshold} -v -c local -i localhost,"
   ]
 }
 ```
 
-### Ansible Approach (Alternative)
+### Customization
+
+#### Skip Specific Sections
+
+To skip specific CIS sections, set `cis_skip_sections`:
+
+```yaml
+# In ansible/vars/cis-defaults.yml or via Packer variable
+cis_skip_sections: ['1.1', '2.2']  # Skip filesystem and special services
+```
+
+#### Change CIS Level
+
+Set `cis_level` to 1 or 2:
+
 ```hcl
-provisioner "ansible-local" {
-  playbook_file   = "ansible/cis-hardening-playbook.yml"
-  extra_arguments = [
-    "-e", "cis_level=1",
-    "-e", "cis_compliance_threshold=80"
-  ]
-}
+# In Packer template or workflow
+cis_level = 1  # Level 1 (basic) or 2 (advanced)
 ```
 
----
-
-## Using Community CIS Roles
-
-### Option: Use dev-sec CIS Role
-
-Instead of writing your own playbook, you can use community-maintained roles:
+#### Adjust Compliance Threshold
 
 ```yaml
-# ansible/requirements.yml
-roles:
-  - name: devsec.cis_ubuntu_22_04
-    src: https://github.com/dev-sec/cis-ubuntu-22.04-ansible
+cis_compliance_threshold: 90  # Require 90% compliance
 ```
 
-Then in your playbook:
-```yaml
-- name: Apply CIS Ubuntu 22.04 Benchmark
-  include_role:
-    name: devsec.cis_ubuntu_22_04
-  vars:
-    cis_level: 1
-```
+### Compliance Reporting
 
-**Benefits:**
-- ✅ Maintained by security experts
-- ✅ Regularly updated with latest CIS benchmarks
-- ✅ Well-tested
-- ✅ Comprehensive coverage
+The compliance check provides:
+- **Overall compliance percentage**
+- **Per-section compliance status**
+- **Failed checks with details**
+- **Option to fail build** if below threshold
 
----
-
-## Compliance Validation
-
-### Shell Script Approach
-- Basic pass/fail reporting
-- Manual parsing of output
-- Non-blocking by default
-
-### Ansible Approach
-- Structured compliance reports
-- Configurable thresholds
-- Option to fail build on non-compliance
-- Better integration with CI/CD
-
----
-
-## Recommendations
-
-1. **Start with Ansible** if you're building a new implementation
-2. **Migrate from shell scripts** if you need better maintainability
-3. **Use community roles** when available (dev-sec, etc.)
-4. **Keep shell scripts** if they're working well and team prefers them
-5. **Consider hybrid** approach for best of both worlds
-
----
-
-## Next Steps
-
-1. **Try Ansible approach**: Use `ubuntu-golden-image-ansible.pkr.hcl`
-2. **Compare build times**: Measure performance difference
-3. **Evaluate maintainability**: See which is easier to update
-4. **Choose based on team needs**: Consider team skills and preferences
-
----
-
-## Resources
+### Resources
 
 - [Ansible Documentation](https://docs.ansible.com/)
-- [Packer Ansible Provisioner](https://www.packer.io/docs/provisioners/ansible)
-- [dev-sec CIS Roles](https://github.com/dev-sec)
-- [CIS Benchmarks](https://www.cisecurity.org/cis-benchmarks/)
+- [CIS Ubuntu 22.04 LTS Benchmark](https://www.cisecurity.org/benchmark/ubuntu_linux)
+- [Packer Documentation](https://www.packer.io/docs)
 
+---
+
+**Note**: This implementation replaces the previous shell script approach for better maintainability and structure.
