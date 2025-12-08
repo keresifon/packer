@@ -31,29 +31,45 @@ When triggering the workflow manually, you can configure:
 - **`target_regions`**: Comma-separated list of target regions (default: `us-west-2,eu-west-1`)
 - **`store_in_parameter_store`**: Whether to store AMI IDs in Parameter Store (default: `true`)
 
-### Default Target Regions
+### Target Regions Configuration
 
-Default target regions are configured in the workflow:
-- `us-west-2` (US West - Oregon)
-- `eu-west-1` (EU - Ireland)
+Target regions are configured in `config/regions.yml`. The workflow reads from this file unless overridden by manual input.
+
+**Regions are configured in** `config/regions.yml` (no defaults).
 
 ### Changing Target Regions
 
-#### Option 1: Workflow Input (Manual Trigger)
+#### Option 1: Edit Config File (Recommended)
+
+Edit `config/regions.yml`:
+
+```yaml
+target_regions:
+  - us-west-2
+  - eu-west-1
+  - ap-southeast-1  # Add new region here
+```
+
+Or use the advanced `region_settings` format:
+
+```yaml
+region_settings:
+  us-west-2:
+    enabled: true
+  ap-southeast-1:
+    enabled: true   # Enable this region
+```
+
+#### Option 2: Workflow Input (Manual Override)
 
 When manually triggering the workflow:
 1. Go to Actions → Build Ubuntu Golden Image → Run workflow
 2. Set `target_regions` field (e.g., `us-west-2,eu-west-1,ap-southeast-1`)
-3. Run workflow
+3. This overrides the config file for that run only
 
-#### Option 2: Update Default (Code Change)
+**Important**: The config file is required. If `config/regions.yml` is missing or empty, the AMI copy job will be skipped.
 
-Edit `.github/workflows/build-image.yml`:
-
-```yaml
-env:
-  TARGET_REGIONS: ${{ github.event.inputs.target_regions || 'us-west-2,eu-west-1,ap-southeast-1' }}
-```
+See `config/README.md` for detailed configuration options.
 
 ## Parameter Store Structure
 

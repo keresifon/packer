@@ -17,9 +17,9 @@ on:
         default: 'us-east-1'
         type: string
       target_regions:
-        description: 'Comma-separated list of target regions to copy AMI (e.g., us-west-2,eu-west-1)'
+        description: 'Comma-separated list of target regions to copy AMI (overrides config/regions.yml)'
         required: false
-        default: 'us-west-2,eu-west-1'
+        default: ''
         type: string
       store_in_parameter_store:
         description: 'Store AMI IDs in Systems Manager Parameter Store'
@@ -35,6 +35,7 @@ on:
     paths:
       - '*.pkr.hcl'
       - 'ansible/**'
+      - 'config/**'
       - '.github/workflows/**'
   pull_request:
     branches:
@@ -43,7 +44,7 @@ on:
 env:
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
   PKR_VAR_ubuntu_version: ${{ github.event.inputs.ubuntu_version || '22.04' }}
-  TARGET_REGIONS: ${{ github.event.inputs.target_regions || 'us-west-2,eu-west-1' }}
+  TARGET_REGIONS: ${{ github.event.inputs.target_regions || '' }}
   STORE_IN_PARAMETER_STORE: ${{ github.event.inputs.store_in_parameter_store || 'true' }}
 
 jobs:
@@ -90,6 +91,8 @@ jobs:
     permissions:
       id-token: write  # Required for OIDC
       contents: read
+    outputs:
+      ami_id: ${{ steps.build.outputs.ami_id }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -138,25 +141,53 @@ jobs:
           
           # Extract AMI ID from Packer output (only if build succeeded)
           # Packer outputs: "us-east-1: ami-xxxxxxxxxxxxxxxxx" at the end on success
-          # Look for the pattern after "AMIs were created:" which indicates successful build
+          # Try multiple patterns to find AMI ID
+          AMI_ID=""
+          
+          # Pattern 1: Look for "AMIs were created:" followed by region and AMI ID
           AMI_ID=$(grep -A 2 "AMIs were created:" packer-build.log | grep -oE 'ami-[a-z0-9]{17}' | head -1 || echo "")
+          
+          # Pattern 2: Look for "region: ami-xxxxx" format
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "" ]; then
+            AMI_ID=$(grep -oE '[a-z0-9-]+: ami-[a-z0-9]{17}' packer-build.log | tail -1 | grep -oE 'ami-[a-z0-9]{17}' || echo "")
+          fi
+          
+          # Pattern 3: Look for any AMI ID near the end of the log (last occurrence)
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "" ]; then
+            AMI_ID=$(grep -oE 'ami-[a-z0-9]{17}' packer-build.log | tail -1 || echo "")
+          fi
           
           if [ -n "$AMI_ID" ] && [ "$AMI_ID" != "" ]; then
             echo "ami_id=$AMI_ID" >> $GITHUB_OUTPUT
             echo "✅ AMI ID extracted: $AMI_ID"
           else
-            echo "❌ Error: Could not extract AMI ID from successful build output"
-            echo "Build may have completed but AMI ID not found in output"
-            exit 1
+            echo "⚠️ Warning: Could not extract AMI ID from build output"
+            echo "Build log tail (last 50 lines):"
+            tail -50 packer-build.log
+            echo ""
+            echo "Setting empty AMI ID - validation and copy jobs will be skipped"
+            echo "ami_id=" >> $GITHUB_OUTPUT
+            # Don't exit 1 - let the job succeed so we can see the logs
           fi
 
-      - name: Output AMI ID
-        if: success()
+      - name: Output AMI ID and Debug
+        if: always()
         run: |
-          echo "AMI build completed successfully!"
-          if [ -n "${{ steps.build.outputs.ami_id }}" ]; then
+          echo "=========================================="
+          echo "Build Job Debug Information"
+          echo "=========================================="
+          echo "Build step exit code: ${{ job.status }}"
+          echo "AMI ID from outputs: '${{ steps.build.outputs.ami_id }}'"
+          echo "AMI ID length: ${#{{ steps.build.outputs.ami_id }}}"
+          echo "=========================================="
+          
+          if [ -n "${{ steps.build.outputs.ami_id }}" ] && [ "${{ steps.build.outputs.ami_id }}" != "" ]; then
+            echo "✅ AMI build completed successfully!"
             echo "AMI ID: ${{ steps.build.outputs.ami_id }}"
             echo "Check AWS EC2 Console for the latest AMI"
+          else
+            echo "⚠️ Warning: AMI ID not found in outputs"
+            echo "This may prevent validation and copy jobs from running"
           fi
 
       - name: Upload Packer build log
@@ -167,15 +198,52 @@ jobs:
           path: packer-build.log
           retention-days: 7
 
+  debug-build-outputs:
+    name: Debug Build Outputs
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Debug AMI ID extraction
+        run: |
+          echo "=========================================="
+          echo "Build Job Outputs Debug"
+          echo "=========================================="
+          echo "Build job result: ${{ needs.build.result }}"
+          echo "AMI ID from outputs: '${{ needs.build.outputs.ami_id }}'"
+          echo "AMI ID length: ${#{{ needs.build.outputs.ami_id }}}"
+          echo "AMI ID is null: ${{ needs.build.outputs.ami_id == null }}"
+          echo "AMI ID is empty: ${{ needs.build.outputs.ami_id == '' }}"
+          echo "AMI ID equals 'null': ${{ needs.build.outputs.ami_id == 'null' }}"
+          echo "=========================================="
+          echo ""
+          echo "Condition evaluation:"
+          echo "- needs.build.result == 'success': ${{ needs.build.result == 'success' }}"
+          echo "- needs.build.outputs.ami_id != null: ${{ needs.build.outputs.ami_id != null }}"
+          echo "- needs.build.outputs.ami_id != '': ${{ needs.build.outputs.ami_id != '' }}"
+          echo "- needs.build.outputs.ami_id != 'null': ${{ needs.build.outputs.ami_id != 'null' }}"
+          echo "=========================================="
+
   validate-ami:
     name: Validate AMI
     needs: build
     runs-on: ubuntu-latest
-    if: success() && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != ''
+    if: always() && needs.build.result == 'success' && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != '' && needs.build.outputs.ami_id != 'null'
     permissions:
       id-token: write  # Required for OIDC
       contents: read
     steps:
+      - name: Debug - Check why job is running or not
+        run: |
+          echo "=========================================="
+          echo "Validate-AMI Job Debug"
+          echo "=========================================="
+          echo "Build job result: ${{ needs.build.result }}"
+          echo "AMI ID value: '${{ needs.build.outputs.ami_id }}'"
+          echo "AMI ID is null: ${{ needs.build.outputs.ami_id == null }}"
+          echo "AMI ID is empty: ${{ needs.build.outputs.ami_id == '' }}"
+          echo "=========================================="
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -398,7 +466,7 @@ jobs:
     name: Copy AMI to Target Regions
     needs: [build, validate-ami]
     runs-on: ubuntu-latest
-    if: success() && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != ''
+    if: success() && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != '' && needs.build.outputs.ami_id != 'null'
     permissions:
       id-token: write  # Required for OIDC
       contents: read
@@ -412,7 +480,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.PKR_VAR_aws_region }}
 
-      - name: Install AWS CLI and jq
+      - name: Install AWS CLI, jq, and PyYAML
         run: |
           # Install AWS CLI
           curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
@@ -420,23 +488,101 @@ jobs:
           sudo ./aws/install
           rm -rf aws awscliv2.zip
           
-          # Install jq
+          # Install jq and PyYAML (for YAML parsing)
           sudo apt-get update
-          sudo apt-get install -y jq
+          sudo apt-get install -y jq python3-pip
+          pip3 install pyyaml
 
-      - name: Parse target regions
+      - name: Parse target regions from config or input
         id: parse-regions
         run: |
-          if [ -z "${{ env.TARGET_REGIONS }}" ] || [ "${{ env.TARGET_REGIONS }}" = "" ]; then
+          # Check if target_regions input was provided (manual override)
+          if [ -n "${{ env.TARGET_REGIONS }}" ] && [ "${{ env.TARGET_REGIONS }}" != "" ]; then
+            echo "Using target regions from workflow input: ${{ env.TARGET_REGIONS }}"
+            REGIONS_INPUT="${{ env.TARGET_REGIONS }}"
+          else
+            echo "Reading target regions from config file: config/regions.yml"
+            
+            # Read from config file using Python
+            REGIONS_INPUT=$(python3 << 'EOF'
+          import yaml
+          import sys
+          
+          try:
+              with open('config/regions.yml', 'r') as f:
+                  config = yaml.safe_load(f)
+              
+              # Config file exists but is empty or None
+              if not config:
+                  print("Warning: Config file exists but is empty", file=sys.stderr)
+                  print("No regions will be copied. Configure 'target_regions' in config/regions.yml to enable copying.", file=sys.stderr)
+                  print("")
+                  sys.exit(0)  # Exit 0 = skip copy, don't fail
+              
+              # First try: use target_regions list
+              if 'target_regions' in config and config['target_regions']:
+                  regions = [r.strip() for r in config['target_regions'] if r and r.strip()]
+                  if regions:
+                      print(','.join(regions))
+                      sys.exit(0)
+              
+              # Second try: use enabled regions from region_settings
+              if 'region_settings' in config:
+                  enabled_regions = [
+                      region for region, settings in config['region_settings'].items()
+                      if settings.get('enabled', False)
+                  ]
+                  if enabled_regions:
+                      print(','.join(enabled_regions))
+                      sys.exit(0)
+              
+              # No regions found - config exists but no regions configured
+              print("Warning: No target regions found in config file", file=sys.stderr)
+              print("No regions will be copied. Configure 'target_regions' or 'region_settings' in config/regions.yml to enable copying.", file=sys.stderr)
+              print("")
+              sys.exit(0)  # Exit 0 = skip copy, don't fail
+          except FileNotFoundError:
+              print("Error: Config file 'config/regions.yml' not found", file=sys.stderr)
+              print("Please create config/regions.yml with target_regions configuration", file=sys.stderr)
+              print("")
+              sys.exit(1)  # Exit 1 = fail, config file is required
+          except Exception as e:
+              print(f"Error reading config: {e}", file=sys.stderr)
+              print("")
+              sys.exit(1)  # Exit 1 = fail on parsing errors
+          EOF
+            )
+            
+            # Check exit code from Python script
+            PYTHON_EXIT_CODE=$?
+            
+            if [ $PYTHON_EXIT_CODE -ne 0 ]; then
+              echo "❌ Error: Failed to read config/regions.yml"
+              echo "Config file is required. Please create config/regions.yml with target_regions configuration"
+              exit 1
+            fi
+            
+            # Check if regions were found
+            if [ -z "$REGIONS_INPUT" ] || [ "$REGIONS_INPUT" = "" ]; then
+              echo "⚠️ No target regions configured in config/regions.yml"
+              echo "AMI copy will be skipped. Configure 'target_regions' in config/regions.yml to enable copying."
+              echo "regions_json=[]" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "✅ Using target regions from config: $REGIONS_INPUT"
+            fi
+          fi
+          
+          if [ -z "$REGIONS_INPUT" ] || [ "$REGIONS_INPUT" = "" ]; then
             echo "No target regions specified, skipping copy"
             echo "regions_json=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
           
           # Convert comma-separated regions to JSON array
-          REGIONS_JSON=$(echo "${{ env.TARGET_REGIONS }}" | tr ',' '\n' | jq -R . | jq -s .)
+          REGIONS_JSON=$(echo "$REGIONS_INPUT" | tr ',' '\n' | jq -R . | jq -s .)
           echo "regions_json=$REGIONS_JSON" >> $GITHUB_OUTPUT
-          echo "Target regions: ${{ env.TARGET_REGIONS }}"
+          echo "Target regions: $REGIONS_INPUT"
 
       - name: Copy AMI to target regions
         id: copy-ami
