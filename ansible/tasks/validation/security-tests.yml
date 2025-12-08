@@ -27,6 +27,6 @@
 
 - name: Display file permissions
   debug:
-    msg: "{{ item.item }}: {{ item.stat.mode }} ({{ item.stat.owner }}:{{ item.stat.group }})"
+    msg: "{{ item.item }}: {{ item.stat.mode }} ({{ item.stat.pw_name }}:{{ item.stat.gr_name }})"
   loop: "{{ file_perms.results }}"
 
