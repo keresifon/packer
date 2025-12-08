@@ -2,6 +2,11 @@
 # Calculate compliance statistics from all checks
 # This task should be included after all compliance checks have run
 
+- name: Extract PASS/FAIL from multi-line outputs
+  set_fact:
+    rsyslog_status: "{{ 'PASS' if 'PASS' in rsyslog_check.stdout_lines else ('FAIL' if 'FAIL' in rsyslog_check.stdout_lines else rsyslog_check.stdout) }}"
+    timesync_status: "{{ 'PASS' if 'PASS' in timesync_check.stdout_lines else ('FAIL' if 'FAIL' in timesync_check.stdout_lines else timesync_check.stdout) }}"
+
 - name: Calculate compliance percentage
   set_fact:
     compliance_checks_base:
@@ -9,11 +14,11 @@
       - "{{ bootloader_check.stdout | default('PASS') }}"
       - "{{ coredump_check.stdout }}"
       - "{{ aslr_check.stdout }}"
-      - "{{ apparmor_check.rc | ternary('PASS', 'FAIL') }}"
+      - "{{ 'PASS' if apparmor_check.rc == 0 else 'FAIL' }}"
       - "{{ ip_forward_check.stdout }}"
       - "{{ syn_cookies_check.stdout }}"
-      - "{{ rsyslog_check.stdout }}"
-      - "{{ timesync_check.stdout }}"
+      - "{{ rsyslog_status }}"
+      - "{{ timesync_status }}"
       - "{{ passwd_perm_check.stdout }}"
     compliance_checks_level2: "{{ [] }}"
     compliance_checks_detailed_base:
@@ -21,11 +26,11 @@
       - { name: "CIS 1.4 - Bootloader password protection", status: "{{ bootloader_check.stdout | default('PASS') }}" }
       - { name: "CIS 1.5.1 - Core dumps restricted", status: "{{ coredump_check.stdout }}" }
       - { name: "CIS 1.5.3 - ASLR enabled", status: "{{ aslr_check.stdout }}" }
-      - { name: "CIS 1.6.1.1 - AppArmor installed", status: "{{ apparmor_check.rc | ternary('PASS', 'FAIL') }}" }
+      - { name: "CIS 1.6.1.1 - AppArmor installed", status: "{{ 'PASS' if apparmor_check.rc == 0 else 'FAIL' }}" }
       - { name: "CIS 3.1.1 - IP forwarding disabled", status: "{{ ip_forward_check.stdout }}" }
       - { name: "CIS 3.1.2 - SYN cookies enabled", status: "{{ syn_cookies_check.stdout }}" }
-      - { name: "CIS 4.1 - rsyslog configured", status: "{{ rsyslog_check.stdout }}" }
-      - { name: "CIS 5.1 - Time synchronization configured", status: "{{ timesync_check.stdout }}" }
+      - { name: "CIS 4.1 - rsyslog configured", status: "{{ rsyslog_status }}" }
+      - { name: "CIS 5.1 - Time synchronization configured", status: "{{ timesync_status }}" }
       - { name: "CIS 6.1.1 - /etc/passwd permissions", status: "{{ passwd_perm_check.stdout }}" }
     compliance_checks_detailed_level2: "{{ [] }}"
 
