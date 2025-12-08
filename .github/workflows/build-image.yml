@@ -661,8 +661,8 @@ jobs:
             if [ -n "$COPIED_AMI_ID" ] && [ "$COPIED_AMI_ID" != "None" ]; then
               echo "✅ AMI copied successfully: $COPIED_AMI_ID"
               
-              # Add to JSON object
-              COPIED_AMIS_JSON=$(echo "$COPIED_AMIS_JSON" | jq --arg region "$TARGET_REGION" --arg ami "$COPIED_AMI_ID" '. + {($region): $ami}')
+              # Add to JSON object (compact format for GitHub output)
+              COPIED_AMIS_JSON=$(echo "$COPIED_AMIS_JSON" | jq -c --arg region "$TARGET_REGION" --arg ami "$COPIED_AMI_ID" '. + {($region): $ami}')
               
               # Tag the copied AMI
               aws ec2 create-tags \
@@ -679,6 +679,8 @@ jobs:
             fi
           done
           
+          # Ensure JSON is compact before writing to GitHub output
+          COPIED_AMIS_JSON=$(echo "$COPIED_AMIS_JSON" | jq -c .)
           echo "copied_amis=$COPIED_AMIS_JSON" >> $GITHUB_OUTPUT
           
           echo "=========================================="
