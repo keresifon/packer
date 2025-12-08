@@ -33,31 +33,22 @@ When triggering the workflow manually, you can configure:
 
 ### Target Regions Configuration
 
-Target regions are configured in `config/regions.yml`. The workflow reads from this file unless overridden by manual input.
+Target regions are configured in `config/build-config.yml` under the `distribution` section. The workflow reads from this file unless overridden by manual input.
 
-**Regions are configured in** `config/regions.yml` (no defaults).
+**Regions are configured in** `config/build-config.yml` under `distribution.target_regions` (no defaults).
 
 ### Changing Target Regions
 
 #### Option 1: Edit Config File (Recommended)
 
-Edit `config/regions.yml`:
+Edit `config/build-config.yml` under the `distribution` section:
 
 ```yaml
-target_regions:
-  - us-west-2
-  - eu-west-1
-  - ap-southeast-1  # Add new region here
-```
-
-Or use the advanced `region_settings` format:
-
-```yaml
-region_settings:
-  us-west-2:
-    enabled: true
-  ap-southeast-1:
-    enabled: true   # Enable this region
+distribution:
+  target_regions:
+    - us-west-2
+    - eu-west-1
+    - ap-southeast-1  # Add new region here
 ```
 
 #### Option 2: Workflow Input (Manual Override)
@@ -67,7 +58,7 @@ When manually triggering the workflow:
 2. Set `target_regions` field (e.g., `us-west-2,eu-west-1,ap-southeast-1`)
 3. This overrides the config file for that run only
 
-**Important**: The config file is required. If `config/regions.yml` is missing or empty, the AMI copy job will be skipped.
+**Important**: The config file is required. If `config/build-config.yml` is missing or the `distribution.target_regions` section is empty, the AMI copy job will be skipped.
 
 See `config/README.md` for detailed configuration options.
 

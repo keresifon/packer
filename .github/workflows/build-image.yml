@@ -17,7 +17,7 @@ on:
         default: 'us-east-1'
         type: string
       target_regions:
-        description: 'Comma-separated list of target regions to copy AMI (overrides config/regions.yml)'
+        description: 'Comma-separated list of target regions to copy AMI (overrides config/build-config.yml)'
         required: false
         default: ''
         type: string
@@ -58,6 +58,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install yq for config parsing
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
       - name: Setup Packer
         uses: hashicorp/setup-packer@main
         with:
@@ -97,6 +103,49 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install yq for config parsing
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Read build configuration
+        id: config
+        run: |
+          # Read config values and set outputs
+          CONFIG_FILE="config/build-config.yml"
+          
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "Warning: $CONFIG_FILE not found, using defaults"
+            exit 0
+          fi
+          
+          # Extract values from config
+          DEFAULT_REGION=$(yq eval '.build.default_region' "$CONFIG_FILE" || echo "us-east-1")
+          DEFAULT_UBUNTU_VERSION=$(yq eval '.build.default_ubuntu_version' "$CONFIG_FILE" || echo "22.04")
+          BUILD_NAME=$(yq eval '.build.build_name' "$CONFIG_FILE" || echo "ubuntu-golden-image")
+          INSTANCE_TYPE=$(yq eval '.instance.build_instance_type' "$CONFIG_FILE" || echo "t3.micro")
+          SSH_USERNAME=$(yq eval '.instance.ssh_username' "$CONFIG_FILE" || echo "ubuntu")
+          CIS_LEVEL=$(yq eval '.cis.default_level' "$CONFIG_FILE" || echo "2")
+          CIS_THRESHOLD=$(yq eval '.cis.default_compliance_threshold' "$CONFIG_FILE" || echo "80")
+          FAIL_ON_NON_COMPLIANCE=$(yq eval '.cis.default_fail_on_non_compliance' "$CONFIG_FILE" || echo "false")
+          PARAMETER_STORE_ENABLED=$(yq eval '.parameter_store.enabled' "$CONFIG_FILE" || echo "true")
+          PARAMETER_STORE_BASE_PATH=$(yq eval '.parameter_store.base_path' "$CONFIG_FILE" || echo "/packer/ubuntu-golden-image")
+          
+          # Set outputs (workflow inputs override config)
+          echo "config_default_region=$DEFAULT_REGION" >> $GITHUB_OUTPUT
+          echo "config_default_ubuntu_version=$DEFAULT_UBUNTU_VERSION" >> $GITHUB_OUTPUT
+          echo "config_build_name=$BUILD_NAME" >> $GITHUB_OUTPUT
+          echo "config_instance_type=$INSTANCE_TYPE" >> $GITHUB_OUTPUT
+          echo "config_ssh_username=$SSH_USERNAME" >> $GITHUB_OUTPUT
+          echo "config_cis_level=$CIS_LEVEL" >> $GITHUB_OUTPUT
+          echo "config_cis_threshold=$CIS_THRESHOLD" >> $GITHUB_OUTPUT
+          echo "config_fail_on_non_compliance=$FAIL_ON_NON_COMPLIANCE" >> $GITHUB_OUTPUT
+          echo "config_parameter_store_enabled=$PARAMETER_STORE_ENABLED" >> $GITHUB_OUTPUT
+          echo "config_parameter_store_base_path=$PARAMETER_STORE_BASE_PATH" >> $GITHUB_OUTPUT
+          
+          echo "✅ Configuration loaded from build-config.yml"
+
       - name: Setup Packer
         uses: hashicorp/setup-packer@main
         with:
@@ -124,10 +173,42 @@ jobs:
         run: |
           set -e  # Exit on error
           
+          # Use config values if available, otherwise use workflow inputs/defaults
+          AWS_REGION="${{ env.PKR_VAR_aws_region }}"
+          UBUNTU_VERSION="${{ env.PKR_VAR_ubuntu_version }}"
+          INSTANCE_TYPE="${{ steps.config.outputs.config_instance_type || 't3.micro' }}"
+          IMAGE_NAME="${{ steps.config.outputs.config_build_name || 'ubuntu-golden-image' }}"
+          SSH_USERNAME="${{ steps.config.outputs.config_ssh_username || 'ubuntu' }}"
+          CIS_LEVEL="${{ steps.config.outputs.config_cis_level || '2' }}"
+          CIS_THRESHOLD="${{ steps.config.outputs.config_cis_threshold || '80' }}"
+          FAIL_ON_NON_COMPLIANCE="${{ steps.config.outputs.config_fail_on_non_compliance || 'false' }}"
+          
+          # Read additional config values for Packer
+          BLOCK_DEVICE_NAME=$(yq eval '.block_device.device_name' config/build-config.yml || echo "/dev/sda1")
+          VOLUME_SIZE=$(yq eval '.block_device.volume_size' config/build-config.yml || echo "20")
+          VOLUME_TYPE=$(yq eval '.block_device.volume_type' config/build-config.yml || echo "gp3")
+          VOLUME_ENCRYPTED=$(yq eval '.block_device.encrypted' config/build-config.yml || echo "true")
+          TAG_OS=$(yq eval '.tags.os' config/build-config.yml || echo "Ubuntu")
+          TAG_MANAGED_BY=$(yq eval '.tags.managed_by' config/build-config.yml || echo "Packer")
+          TAG_ENVIRONMENT=$(yq eval '.tags.environment' config/build-config.yml || echo "Production")
+          
           # Run packer build and capture exit code
           packer build \
-            -var="aws_region=${{ env.PKR_VAR_aws_region }}" \
-            -var="ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}" \
+            -var="aws_region=$AWS_REGION" \
+            -var="ubuntu_version=$UBUNTU_VERSION" \
+            -var="instance_type=$INSTANCE_TYPE" \
+            -var="image_name=$IMAGE_NAME" \
+            -var="ssh_username=$SSH_USERNAME" \
+            -var="cis_level=$CIS_LEVEL" \
+            -var="cis_compliance_threshold=$CIS_THRESHOLD" \
+            -var="fail_on_non_compliance=$FAIL_ON_NON_COMPLIANCE" \
+            -var="block_device_name=$BLOCK_DEVICE_NAME" \
+            -var="volume_size=$VOLUME_SIZE" \
+            -var="volume_type=$VOLUME_TYPE" \
+            -var="volume_encrypted=$VOLUME_ENCRYPTED" \
+            -var="tag_os=$TAG_OS" \
+            -var="tag_managed_by=$TAG_MANAGED_BY" \
+            -var="tag_environment=$TAG_ENVIRONMENT" \
             ubuntu-golden-image.pkr.hcl | tee packer-build.log
           
           PACKER_EXIT_CODE=${PIPESTATUS[0]}
@@ -198,6 +279,65 @@ jobs:
           name: packer-build-log
           path: packer-build.log
           retention-days: 7
+
+      - name: Generate CIS Compliance Summary
+        if: always()
+        run: |
+          echo "## 🔒 CIS Compliance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract compliance information from Packer build log
+          if grep -q "CIS Compliance Report" packer-build.log; then
+            # Extract compliance percentage
+            COMPLIANCE_PCT=$(grep -oP "Compliance: \K[0-9]+" packer-build.log | tail -1 || echo "N/A")
+            PASSED=$(grep -oP "Passed: \K[0-9]+" packer-build.log | tail -1 || echo "N/A")
+            TOTAL=$(grep -oP "Passed: [0-9]+/\K[0-9]+" packer-build.log | tail -1 || echo "N/A")
+            THRESHOLD=$(grep -oP "Threshold: \K[0-9]+" packer-build.log | tail -1 || echo "80")
+            
+            if [ "$COMPLIANCE_PCT" != "N/A" ]; then
+              # Determine status
+              if [ "$COMPLIANCE_PCT" -ge "$THRESHOLD" ]; then
+                STATUS_ICON="✅"
+                STATUS="PASS"
+                STATUS_COLOR="green"
+              else
+                STATUS_ICON="❌"
+                STATUS="FAIL"
+                STATUS_COLOR="red"
+              fi
+              
+              echo "### $STATUS_ICON Status: **$STATUS**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+              echo "| **Compliance** | **$COMPLIANCE_PCT%** |" >> $GITHUB_STEP_SUMMARY
+              echo "| Threshold | $THRESHOLD% |" >> $GITHUB_STEP_SUMMARY
+              echo "| Passed Checks | $PASSED / $TOTAL |" >> $GITHUB_STEP_SUMMARY
+              echo "| CIS Level | 2 |" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Extract failed checks if available
+              if grep -q "Failed checks:" packer-build.log; then
+                FAILED_CHECKS=$(grep -A 1 "Failed checks:" packer-build.log | tail -1 | sed 's/.*: //' || echo "")
+                if [ -n "$FAILED_CHECKS" ] && [ "$FAILED_CHECKS" != "" ]; then
+                  echo "### ❌ Failed Checks" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "$FAILED_CHECKS" | sed 's/, /\n- /g' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                fi
+              fi
+              
+              echo "---" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "> 📋 For detailed compliance information, check the Packer build logs." >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ Could not extract compliance information from build logs." >> $GITHUB_STEP_SUMMARY
+              echo "Check the Packer build log for details." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "⚠️ CIS compliance check not found in build logs." >> $GITHUB_STEP_SUMMARY
+            echo "The compliance check may not have run or the build failed before it completed." >> $GITHUB_STEP_SUMMARY
+          fi
 
   debug-build-outputs:
     name: Debug Build Outputs
@@ -320,6 +460,26 @@ jobs:
           echo "key_name=$KEY_NAME" >> $GITHUB_OUTPUT
           echo "Key pair created: $KEY_NAME"
 
+      - name: Install yq for config parsing
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Read build configuration for validation
+        id: config-validation
+        run: |
+          CONFIG_FILE="config/build-config.yml"
+          VALIDATION_INSTANCE_TYPE=$(yq eval '.instance.validation_instance_type' "$CONFIG_FILE" || echo "t3.micro")
+          VALIDATION_CIS_LEVEL=$(yq eval '.cis.validation_level' "$CONFIG_FILE" || echo "2")
+          VALIDATION_CIS_THRESHOLD=$(yq eval '.cis.validation_threshold' "$CONFIG_FILE" || echo "80")
+          VALIDATION_FAIL_ON_FAILURE=$(yq eval '.cis.validation_fail_on_failure' "$CONFIG_FILE" || echo "false")
+          
+          echo "validation_instance_type=$VALIDATION_INSTANCE_TYPE" >> $GITHUB_OUTPUT
+          echo "validation_cis_level=$VALIDATION_CIS_LEVEL" >> $GITHUB_OUTPUT
+          echo "validation_cis_threshold=$VALIDATION_CIS_THRESHOLD" >> $GITHUB_OUTPUT
+          echo "validation_fail_on_failure=$VALIDATION_FAIL_ON_FAILURE" >> $GITHUB_OUTPUT
+
       - name: Launch test instance
         id: launch-instance
         run: |
@@ -327,10 +487,11 @@ jobs:
           SG_ID="${{ steps.create-sg.outputs.sg_id }}"
           KEY_NAME="${{ steps.create-keypair.outputs.key_name }}"
           INSTANCE_NAME="ami-validation-$(date +%Y%m%d-%H%M%S)"
+          INSTANCE_TYPE="${{ steps.config-validation.outputs.validation_instance_type || 't3.micro' }}"
           
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
-            --instance-type t3.micro \
+            --instance-type "$INSTANCE_TYPE" \
             --security-group-ids "$SG_ID" \
             --key-name "$KEY_NAME" \
             --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Purpose,Value=AMI-Validation},{Key=Build,Value=${{ github.run_id }}}]" \
@@ -416,19 +577,81 @@ jobs:
           export ANSIBLE_HOST_KEY_CHECKING=False
           export ANSIBLE_SSH_PRIVATE_KEY_FILE=/tmp/validation_key.pem
           
+          # Use config values for validation
+          VALIDATION_CIS_LEVEL="${{ steps.config-validation.outputs.validation_cis_level || '2' }}"
+          VALIDATION_CIS_THRESHOLD="${{ steps.config-validation.outputs.validation_cis_threshold || '80' }}"
+          VALIDATION_FAIL_ON_FAILURE="${{ steps.config-validation.outputs.validation_fail_on_failure || 'false' }}"
+          
           ansible-playbook \
             --private-key=/tmp/validation_key.pem \
             --ssh-common-args="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
             -i "$PUBLIC_IP," \
             -u ubuntu \
             ansible/ami-validation-playbook.yml \
-            -e "cis_level=2" \
-            -e "cis_compliance_threshold=80" \
-            -e "fail_on_validation_failure=false" \
-            -v
+            -e "cis_level=$VALIDATION_CIS_LEVEL" \
+            -e "cis_compliance_threshold=$VALIDATION_CIS_THRESHOLD" \
+            -e "fail_on_validation_failure=$VALIDATION_FAIL_ON_FAILURE" \
+            -v | tee validation-output.log
           
           VALIDATION_EXIT=$?
           echo "validation_exit_code=$VALIDATION_EXIT" >> $GITHUB_OUTPUT
+
+      - name: Generate CIS Compliance Summary from Validation
+        if: always()
+        run: |
+          echo "## 🔒 CIS Compliance Report (Post-Build Validation)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract compliance information from validation output
+          if [ -f validation-output.log ] && grep -q "CIS Compliance Report" validation-output.log; then
+            # Extract compliance percentage
+            COMPLIANCE_PCT=$(grep -oP "Compliance: \K[0-9]+" validation-output.log | tail -1 || echo "N/A")
+            PASSED=$(grep -oP "Passed: \K[0-9]+" validation-output.log | tail -1 || echo "N/A")
+            TOTAL=$(grep -oP "Passed: [0-9]+/\K[0-9]+" validation-output.log | tail -1 || echo "N/A")
+            THRESHOLD=$(grep -oP "Threshold: \K[0-9]+" validation-output.log | tail -1 || echo "80")
+            
+            if [ "$COMPLIANCE_PCT" != "N/A" ]; then
+              # Determine status
+              if [ "$COMPLIANCE_PCT" -ge "$THRESHOLD" ]; then
+                STATUS_ICON="✅"
+                STATUS="PASS"
+                STATUS_COLOR="green"
+              else
+                STATUS_ICON="❌"
+                STATUS="FAIL"
+                STATUS_COLOR="red"
+              fi
+              
+              echo "### $STATUS_ICON Status: **$STATUS**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+              echo "| **Compliance** | **$COMPLIANCE_PCT%** |" >> $GITHUB_STEP_SUMMARY
+              echo "| Threshold | $THRESHOLD% |" >> $GITHUB_STEP_SUMMARY
+              echo "| Passed Checks | $PASSED / $TOTAL |" >> $GITHUB_STEP_SUMMARY
+              echo "| CIS Level | 2 |" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Extract failed checks if available
+              if grep -q "Failed checks:" validation-output.log; then
+                FAILED_CHECKS=$(grep -A 1 "Failed checks:" validation-output.log | tail -1 | sed 's/.*: //' || echo "")
+                if [ -n "$FAILED_CHECKS" ] && [ "$FAILED_CHECKS" != "" ]; then
+                  echo "### ❌ Failed Checks" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "$FAILED_CHECKS" | sed 's/, /\n- /g' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                fi
+              fi
+              
+              echo "---" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "> 📋 This is the post-build validation compliance check. For build-time compliance, check the build job summary." >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ Could not extract compliance information from validation logs." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "⚠️ CIS compliance check not found in validation logs." >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload validation report
         if: always()
@@ -534,51 +757,45 @@ jobs:
             echo "Using target regions from workflow input: ${{ env.TARGET_REGIONS }}"
             REGIONS_INPUT="${{ env.TARGET_REGIONS }}"
           else
-            echo "Reading target regions from config file: config/regions.yml"
+            echo "Reading target regions from config file: config/build-config.yml"
             
-            # Read from config file using Python
+            # Read from build-config.yml using Python
             REGIONS_INPUT=$(python3 << 'EOF'
           import yaml
           import sys
+          import os
+          
+          config_file = 'config/build-config.yml'
           
           try:
-              with open('config/regions.yml', 'r') as f:
+              if not os.path.exists(config_file):
+                  print("Error: Config file 'config/build-config.yml' not found", file=sys.stderr)
+                  print("Please create config/build-config.yml with distribution.target_regions configuration", file=sys.stderr)
+                  print("")
+                  sys.exit(1)  # Exit 1 = fail, config file is required
+              
+              with open(config_file, 'r') as f:
                   config = yaml.safe_load(f)
               
               # Config file exists but is empty or None
               if not config:
                   print("Warning: Config file exists but is empty", file=sys.stderr)
-                  print("No regions will be copied. Configure 'target_regions' in config/regions.yml to enable copying.", file=sys.stderr)
+                  print("No regions will be copied. Configure 'distribution.target_regions' in config/build-config.yml to enable copying.", file=sys.stderr)
                   print("")
                   sys.exit(0)  # Exit 0 = skip copy, don't fail
               
-              # First try: use target_regions list
-              if 'target_regions' in config and config['target_regions']:
-                  regions = [r.strip() for r in config['target_regions'] if r and r.strip()]
+              # Use distribution.target_regions (build-config.yml)
+              if 'distribution' in config and 'target_regions' in config['distribution']:
+                  regions = [r.strip() for r in config['distribution']['target_regions'] if r and r.strip()]
                   if regions:
                       print(','.join(regions))
                       sys.exit(0)
               
-              # Second try: use enabled regions from region_settings
-              if 'region_settings' in config:
-                  enabled_regions = [
-                      region for region, settings in config['region_settings'].items()
-                      if settings.get('enabled', False)
-                  ]
-                  if enabled_regions:
-                      print(','.join(enabled_regions))
-                      sys.exit(0)
-              
               # No regions found - config exists but no regions configured
               print("Warning: No target regions found in config file", file=sys.stderr)
-              print("No regions will be copied. Configure 'target_regions' or 'region_settings' in config/regions.yml to enable copying.", file=sys.stderr)
+              print("No regions will be copied. Configure 'distribution.target_regions' in config/build-config.yml to enable copying.", file=sys.stderr)
               print("")
               sys.exit(0)  # Exit 0 = skip copy, don't fail
-          except FileNotFoundError:
-              print("Error: Config file 'config/regions.yml' not found", file=sys.stderr)
-              print("Please create config/regions.yml with target_regions configuration", file=sys.stderr)
-              print("")
-              sys.exit(1)  # Exit 1 = fail, config file is required
           except Exception as e:
               print(f"Error reading config: {e}", file=sys.stderr)
               print("")
@@ -590,15 +807,15 @@ jobs:
             PYTHON_EXIT_CODE=$?
             
             if [ $PYTHON_EXIT_CODE -ne 0 ]; then
-              echo "❌ Error: Failed to read config/regions.yml"
-              echo "Config file is required. Please create config/regions.yml with target_regions configuration"
+              echo "❌ Error: Failed to read config/build-config.yml"
+              echo "Config file is required. Please create config/build-config.yml with distribution.target_regions configuration"
               exit 1
             fi
             
             # Check if regions were found
             if [ -z "$REGIONS_INPUT" ] || [ "$REGIONS_INPUT" = "" ]; then
-              echo "⚠️ No target regions configured in config/regions.yml"
-              echo "AMI copy will be skipped. Configure 'target_regions' in config/regions.yml to enable copying."
+              echo "⚠️ No target regions configured in config/build-config.yml"
+              echo "AMI copy will be skipped. Configure 'distribution.target_regions' in config/build-config.yml to enable copying."
               echo "regions_json=[]" >> $GITHUB_OUTPUT
               exit 0
             else
@@ -711,8 +928,24 @@ jobs:
             echo "✅ $AMI_ID in $REGION is now available"
           done
 
+      - name: Install yq for config parsing
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Read Parameter Store configuration
+        id: config-parameter-store
+        run: |
+          CONFIG_FILE="config/build-config.yml"
+          PARAMETER_STORE_ENABLED=$(yq eval '.parameter_store.enabled' "$CONFIG_FILE" || echo "true")
+          PARAMETER_STORE_BASE_PATH=$(yq eval '.parameter_store.base_path' "$CONFIG_FILE" || echo "/packer/ubuntu-golden-image")
+          
+          echo "parameter_store_enabled=$PARAMETER_STORE_ENABLED" >> $GITHUB_OUTPUT
+          echo "parameter_store_base_path=$PARAMETER_STORE_BASE_PATH" >> $GITHUB_OUTPUT
+
       - name: Store AMI IDs in Parameter Store
-        if: env.STORE_IN_PARAMETER_STORE == 'true' && steps.copy-ami.outputs.copied_amis != '{}'
+        if: steps.config-parameter-store.outputs.parameter_store_enabled == 'true' && env.STORE_IN_PARAMETER_STORE == 'true' && steps.copy-ami.outputs.copied_amis != '{}'
         run: |
           SOURCE_AMI_ID="${{ needs.build.outputs.ami_id }}"
           SOURCE_REGION="${{ env.PKR_VAR_aws_region }}"
@@ -723,7 +956,7 @@ jobs:
             --output text)
           
           BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          PARAMETER_BASE="/packer/ubuntu-golden-image"
+          PARAMETER_BASE="${{ steps.config-parameter-store.outputs.parameter_store_base_path || '/packer/ubuntu-golden-image' }}"
           
           echo "=========================================="
           echo "Storing AMI IDs in Parameter Store"

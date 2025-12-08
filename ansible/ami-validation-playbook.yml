@@ -89,6 +89,11 @@
               - "Level: {{ cis_level }}"
               - "=========================================="
 
+        - name: Display failed checks
+          debug:
+            msg: "Failed checks: {{ compliance_failed_checks | join(', ') }}"
+          when: compliance_failed_checks | length > 0
+
         - name: Fail if CIS compliance below threshold
           fail:
             msg: "CIS compliance ({{ compliance_percentage }}%) is below threshold ({{ cis_compliance_threshold }}%)"
