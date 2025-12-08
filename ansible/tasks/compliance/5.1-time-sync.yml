@@ -11,4 +11,6 @@
   register: timesync_check
   failed_when: false
   changed_when: false
+  # Extract just PASS/FAIL from output (systemctl may output status text)
+  # The output format is: "PASS" or "FAIL" (may have other text on other lines)
 
