@@ -178,7 +178,8 @@ jobs:
           echo "=========================================="
           echo "Build step exit code: ${{ job.status }}"
           echo "AMI ID from outputs: '${{ steps.build.outputs.ami_id }}'"
-          echo "AMI ID length: ${#{{ steps.build.outputs.ami_id }}}"
+          AMI_ID_VAR="${{ steps.build.outputs.ami_id }}"
+          echo "AMI ID length: ${#AMI_ID_VAR}"
           echo "=========================================="
           
           if [ -n "${{ steps.build.outputs.ami_id }}" ] && [ "${{ steps.build.outputs.ami_id }}" != "" ]; then
@@ -211,7 +212,8 @@ jobs:
           echo "=========================================="
           echo "Build job result: ${{ needs.build.result }}"
           echo "AMI ID from outputs: '${{ needs.build.outputs.ami_id }}'"
-          echo "AMI ID length: ${#{{ needs.build.outputs.ami_id }}}"
+          AMI_ID_VAR="${{ needs.build.outputs.ami_id }}"
+          echo "AMI ID length: ${#AMI_ID_VAR}"
           echo "AMI ID is null: ${{ needs.build.outputs.ami_id == null }}"
           echo "AMI ID is empty: ${{ needs.build.outputs.ami_id == '' }}"
           echo "AMI ID equals 'null': ${{ needs.build.outputs.ami_id == 'null' }}"
