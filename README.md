@@ -746,7 +746,7 @@ packer/
 │   │   └── common/                   # Common reusable tasks
 │   └── vars/                         # Variable files
 ├── config/                           # Configuration files
-│   ├── regions.yml                   # Target regions configuration
+│   ├── build-config.yml              # Build and distribution configuration
 │   └── README.md                     # Config documentation
 ├── ubuntu-golden-image.pkr.hcl      # Main Packer template
 └── variables.example.pkrvars.hcl    # Example variables (for reference)
