@@ -9,7 +9,8 @@
 
   vars:
     # CIS Benchmark Level (1 = Level 1, 2 = Level 2)
-    cis_level: 2
+    # Default to 2 if not provided, and ensure it's an integer
+    cis_level_default: 2
     
     # Skip specific CIS sections if needed (empty list = apply all)
     cis_skip_sections: []
@@ -18,6 +19,10 @@
     cis_compliance_threshold: 80
 
   pre_tasks:
+    - name: Convert cis_level to integer (handle string from Packer)
+      set_fact:
+        cis_level: "{{ (cis_level | default(cis_level_default)) | int }}"
+
     - name: Ensure Python is available
       raw: test -e /usr/bin/python3 || (apt-get update && apt-get install -y python3)
       changed_when: false
