@@ -176,26 +176,34 @@ build {
     ]
   }
 
+  # Provisioning: Copy Ansible directory to remote instance
+  # This ensures all task files, vars, and playbooks are available
+  provisioner "file" {
+    source      = "ansible/"
+    destination = "/tmp/ansible/"
+  }
+
   # Provisioning: CIS Benchmark Hardening with Ansible
-  provisioner "ansible-local" {
-    playbook_file   = "ansible/cis-hardening-playbook.yml"
-    extra_arguments = [
-      "-e", "cis_level=${var.cis_level}",
-      "-e", "cis_compliance_threshold=${var.cis_compliance_threshold}",
-      "-v"  # Verbose output
+  # Run ansible-playbook directly from the copied directory
+  provisioner "shell" {
+    environment_vars = [
+      "ANSIBLE_FORCE_COLOR=1",
+      "PYTHONUNBUFFERED=1"
     ]
-    inventory_groups = ["local"]
+    inline = [
+      "cd /tmp/ansible && ansible-playbook cis-hardening-playbook.yml -e cis_level=${var.cis_level} -e cis_compliance_threshold=${var.cis_compliance_threshold} -v -c local -i localhost,"
+    ]
   }
 
   # Provisioning: CIS Compliance Check with Ansible
-  provisioner "ansible-local" {
-    playbook_file   = "ansible/cis-compliance-check.yml"
-    extra_arguments = [
-      "-e", "cis_compliance_threshold=${var.cis_compliance_threshold}",
-      "-e", "fail_build_on_non_compliance=${var.fail_on_non_compliance}",
-      "-v"  # Verbose output
+  provisioner "shell" {
+    environment_vars = [
+      "ANSIBLE_FORCE_COLOR=1",
+      "PYTHONUNBUFFERED=1"
     ]
-    inventory_groups = ["local"]
+    inline = [
+      "cd /tmp/ansible && ansible-playbook cis-compliance-check.yml -e cis_compliance_threshold=${var.cis_compliance_threshold} -e fail_build_on_non_compliance=${var.fail_on_non_compliance} -v -c local -i localhost,"
+    ]
   }
 
   # Provisioning: Clean up
