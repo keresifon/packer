@@ -244,6 +244,9 @@
     - name: Combine all compliance checks
       set_fact:
         compliance_checks: "{{ compliance_checks_base + (compliance_checks_level2 | select('ne', 'SKIP') | list) }}"
+
+    - name: Calculate compliance statistics
+      set_fact:
         compliance_passed: "{{ compliance_checks | select('equalto', 'PASS') | list | length }}"
         compliance_total: "{{ compliance_checks | length }}"
         compliance_percentage: "{{ ((compliance_passed | int / compliance_total | int) * 100) | int }}"
