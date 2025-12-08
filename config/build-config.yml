@@ -62,6 +62,5 @@ distribution:
   # Simple list format - all listed regions will be copied
   target_regions:
     - us-east-2      # US East (Ohio)
-    - ca-central-1   # Canada (Central)
   
   
