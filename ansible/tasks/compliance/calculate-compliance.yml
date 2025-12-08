@@ -1,0 +1,46 @@
+---
+# Calculate compliance statistics from all checks
+# This task should be included after all compliance checks have run
+
+- name: Calculate compliance percentage
+  set_fact:
+    compliance_checks_base:
+      - "{{ cramfs_check.stdout }}"
+      - "{{ bootloader_check.stdout | default('PASS') }}"
+      - "{{ coredump_check.stdout }}"
+      - "{{ aslr_check.stdout }}"
+      - "{{ apparmor_check.rc | ternary('PASS', 'FAIL') }}"
+      - "{{ ip_forward_check.stdout }}"
+      - "{{ syn_cookies_check.stdout }}"
+      - "{{ rsyslog_check.stdout }}"
+      - "{{ timesync_check.stdout }}"
+      - "{{ passwd_perm_check.stdout }}"
+    compliance_checks_level2: "{{ [] }}"
+
+- name: Build Level 2 compliance checks list
+  set_fact:
+    compliance_checks_level2: "{{ compliance_checks_level2 + [item] }}"
+  loop:
+    - "{{ ssh_protocol_check.stdout | default('SKIP') }}"
+    - "{{ ssh_loglevel_check.stdout | default('SKIP') }}"
+    - "{{ ssh_x11_check.stdout | default('SKIP') }}"
+    - "{{ pass_max_days_check.stdout | default('SKIP') }}"
+    - "{{ pass_min_days_check.stdout | default('SKIP') }}"
+    - "{{ cron_d_perm_check.stdout | default('SKIP') }}"
+  when: (cis_level | default(cis_level_default) | int) >= 2
+  loop_control:
+    label: "{{ item }}"
+
+- name: Combine all compliance checks
+  set_fact:
+    compliance_checks: "{{ compliance_checks_base + (compliance_checks_level2 | select('ne', 'SKIP') | list) }}"
+
+- name: Calculate compliance statistics
+  set_fact:
+    compliance_passed: "{{ compliance_checks | select('equalto', 'PASS') | list | length }}"
+    compliance_total: "{{ compliance_checks | length }}"
+
+- name: Calculate compliance percentage
+  set_fact:
+    compliance_percentage: "{{ ((compliance_passed | int / compliance_total | int) * 100) | int }}"
+

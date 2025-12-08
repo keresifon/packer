@@ -1,0 +1,19 @@
+---
+# CIS 5.1 - Configure Time Synchronization
+# Configures time synchronization service
+
+- name: Install chrony
+  apt:
+    name: chrony
+    state: present
+
+- name: Enable chrony service
+  systemd:
+    name: chronyd
+    enabled: yes
+    state: started
+
+- name: Set timezone to UTC
+  timezone:
+    name: UTC
+

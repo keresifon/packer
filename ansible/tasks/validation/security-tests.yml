@@ -1,0 +1,32 @@
+---
+# Security validation tests for AMI
+
+- name: Verify no default passwords exist
+  shell: |
+    if [ -f /etc/shadow ]; then
+      awk -F: '($2 == "" || $2 == "!") {print $1}' /etc/shadow
+    fi
+  register: empty_passwords
+  changed_when: false
+  failed_when: false
+
+- name: Check for empty passwords
+  debug:
+    msg: "Users with empty passwords: {{ empty_passwords.stdout_lines if empty_passwords.stdout_lines | length > 0 else 'NONE (PASS)' }}"
+  when: empty_passwords.stdout_lines | length > 0
+
+- name: Verify critical files have correct permissions
+  stat:
+    path: "{{ item }}"
+  register: file_perms
+  loop:
+    - /etc/passwd
+    - /etc/shadow
+    - /etc/group
+    - /etc/ssh/sshd_config
+
+- name: Display file permissions
+  debug:
+    msg: "{{ item.item }}: {{ item.stat.mode }} ({{ item.stat.owner }}:{{ item.stat.group }})"
+  loop: "{{ file_perms.results }}"
+
