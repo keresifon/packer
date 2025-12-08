@@ -1,6 +1,6 @@
-# Ubuntu Golden Image Builder with Packer (No HCP)
+# Ubuntu Golden Image Builder with Packer
 
-This repository automates the creation of Ubuntu golden images (AMIs) on AWS using Packer and GitHub Actions for CI/CD. All builds run automatically through GitHub Actions - no local setup required. This version builds AMIs directly in AWS without HCP Packer integration.
+This repository automates the creation of Ubuntu golden images (AMIs) on AWS using Packer and GitHub Actions for CI/CD. All builds run automatically through GitHub Actions - no local setup required. The project includes CIS benchmark hardening, automated validation, and multi-region AMI distribution.
 
 ## Overview
 
@@ -14,10 +14,10 @@ This project provides a fully automated pipeline for building Ubuntu golden imag
 
 - ✅ **Fully Automated**: All builds run through GitHub Actions - no local setup needed
 - ✅ **Secure Authentication**: Uses AWS OIDC (no access keys required)
-- ✅ **Simplified Setup**: No HCP Packer account or credentials needed
+- ✅ **CIS Hardening**: Automated CIS Ubuntu 22.04 LTS Level 2 benchmark compliance
 - ✅ **Encrypted AMIs**: All AMIs are encrypted by default
 - ✅ **Tagged Resources**: AMIs and snapshots are automatically tagged
-- ✅ **Direct AWS Integration**: AMIs are created directly in AWS EC2
+- ✅ **Post-Build Validation**: Automated AMI validation with functional and security tests
 - ✅ **Multi-Region Distribution**: Automatically copies AMIs to target regions
 - ✅ **Parameter Store Integration**: Stores AMI IDs in Systems Manager for easy lookup
 
@@ -73,7 +73,23 @@ This project provides a fully automated pipeline for building Ubuntu golden imag
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 5. Output                                                   │
+│ 5. Post-Build Validation                                    │
+│    - Launch test instance from AMI                          │
+│    - Run functional and security tests                       │
+│    - Verify CIS compliance                                  │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 6. AMI Distribution (Optional)                             │
+│    - Copy AMI to target regions                            │
+│    - Store AMI IDs in Parameter Store                      │
+│    - Tag copied AMIs                                        │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 7. Output                                                   │
 │    - AMI available in AWS EC2                               │
 │    - AMI ID displayed in build output                       │
 │    - Ready to use for launching instances                   │
@@ -125,7 +141,6 @@ Before setting up this repository, ensure you have:
 ```bash
 git clone https://github.com/your-username/packer.git
 cd packer
-git checkout no-hcp-packer  # Switch to the no-HCP branch
 ```
 
 ### Step 2: Configure AWS OIDC Identity Provider
@@ -494,18 +509,6 @@ A CIS compliance check runs during the build process to verify compliance. The a
 - Temporary files removed
 - System cache cleaned
 
-## Differences from HCP Packer Version
-
-This version (`no-hcp-packer` branch) differs from the HCP Packer version:
-
-- ✅ **No HCP Packer integration** - AMI is created but not published to HCP
-- ✅ **Simpler setup** - No HCP account or credentials needed
-- ✅ **Faster configuration** - Only AWS setup required
-- ✅ **Direct AWS integration** - AMIs available immediately in AWS EC2
-- ❌ **No centralized version tracking** - No HCP Packer metadata management
-- ❌ **No HCP channels** - Can't use HCP Packer data sources in Terraform
-- ❌ **Manual AMI tracking** - Need to track AMI IDs manually or via AWS tags
-
 ## CIS Benchmarking
 
 ### Overview
@@ -751,11 +754,11 @@ packer/
 
 ## Contributing
 
-1. Create a feature branch from `no-hcp-packer`
+1. Create a feature branch from `main`
 2. Make your changes
 3. Create a pull request
 4. The workflow will automatically validate your changes
-5. After review and approval, merge to `no-hcp-packer`
+5. After review and approval, merge to `main`
 6. The workflow will automatically build the new AMI
 
 
@@ -776,7 +779,6 @@ For issues or questions:
 
 ---
 
-**Last Updated**: December 2024  
-**Branch**: `no-hcp-packer`
+**Last Updated**: December 2024
 
 
