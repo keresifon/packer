@@ -8,9 +8,14 @@
   gather_facts: yes
 
   vars:
-    cis_level: 2  # CIS Benchmark Level (1 or 2)
+    cis_level_default: 2  # Default CIS Benchmark Level
     cis_compliance_threshold: 80  # Minimum compliance percentage to pass
     fail_build_on_non_compliance: false  # Set to true to fail build on non-compliance
+
+  pre_tasks:
+    - name: Convert cis_level to integer (handle string from Packer)
+      set_fact:
+        cis_level: "{{ (cis_level | default(cis_level_default)) | int }}"
 
   tasks:
     - name: Install compliance checking tools
@@ -145,7 +150,7 @@
       register: ssh_protocol_check
       failed_when: false
       changed_when: false
-      when: cis_level >= 2
+      when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: Check CIS 5.2.2 - SSH LogLevel (Level 2)
       shell: |
@@ -157,7 +162,7 @@
       register: ssh_loglevel_check
       failed_when: false
       changed_when: false
-      when: cis_level >= 2
+      when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: Check CIS 5.2.3 - SSH X11Forwarding disabled (Level 2)
       shell: |
@@ -169,7 +174,7 @@
       register: ssh_x11_check
       failed_when: false
       changed_when: false
-      when: cis_level >= 2
+      when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: Check CIS 6.2.1 - Password expiration configured (Level 2)
       shell: |
@@ -181,7 +186,7 @@
       register: pass_max_days_check
       failed_when: false
       changed_when: false
-      when: cis_level >= 2
+      when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: Check CIS 6.2.2 - Minimum days between password changes (Level 2)
       shell: |
@@ -193,7 +198,7 @@
       register: pass_min_days_check
       failed_when: false
       changed_when: false
-      when: cis_level >= 2
+      when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: Check CIS 6.3.1 - Cron permissions (Level 2)
       shell: |
@@ -205,16 +210,7 @@
       register: cron_d_perm_check
       failed_when: false
       changed_when: false
-      when: cis_level >= 2
-
-    - name: Set default values for Level 2 checks
-      set_fact:
-        ssh_protocol_check: "{{ ssh_protocol_check | default({'stdout': 'SKIP'}) }}"
-        ssh_loglevel_check: "{{ ssh_loglevel_check | default({'stdout': 'SKIP'}) }}"
-        ssh_x11_check: "{{ ssh_x11_check | default({'stdout': 'SKIP'}) }}"
-        pass_max_days_check: "{{ pass_max_days_check | default({'stdout': 'SKIP'}) }}"
-        pass_min_days_check: "{{ pass_min_days_check | default({'stdout': 'SKIP'}) }}"
-        cron_d_perm_check: "{{ cron_d_perm_check | default({'stdout': 'SKIP'}) }}"
+      when: (cis_level | default(cis_level_default) | int) >= 2
 
     - name: Calculate compliance percentage
       set_fact:
@@ -229,13 +225,24 @@
           - "{{ rsyslog_check.stdout }}"
           - "{{ timesync_check.stdout }}"
           - "{{ passwd_perm_check.stdout }}"
-        compliance_checks_level2:
-          - "{{ ssh_protocol_check.stdout }}"
-          - "{{ ssh_loglevel_check.stdout }}"
-          - "{{ ssh_x11_check.stdout }}"
-          - "{{ pass_max_days_check.stdout }}"
-          - "{{ pass_min_days_check.stdout }}"
-          - "{{ cron_d_perm_check.stdout }}"
+        compliance_checks_level2: "{{ [] }}"
+
+    - name: Build Level 2 compliance checks list
+      set_fact:
+        compliance_checks_level2: "{{ compliance_checks_level2 + [item] }}"
+      loop:
+        - "{{ ssh_protocol_check.stdout | default('SKIP') }}"
+        - "{{ ssh_loglevel_check.stdout | default('SKIP') }}"
+        - "{{ ssh_x11_check.stdout | default('SKIP') }}"
+        - "{{ pass_max_days_check.stdout | default('SKIP') }}"
+        - "{{ pass_min_days_check.stdout | default('SKIP') }}"
+        - "{{ cron_d_perm_check.stdout | default('SKIP') }}"
+      when: (cis_level | default(cis_level_default) | int) >= 2
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Combine all compliance checks
+      set_fact:
         compliance_checks: "{{ compliance_checks_base + (compliance_checks_level2 | select('ne', 'SKIP') | list) }}"
         compliance_passed: "{{ compliance_checks | select('equalto', 'PASS') | list | length }}"
         compliance_total: "{{ compliance_checks | length }}"
