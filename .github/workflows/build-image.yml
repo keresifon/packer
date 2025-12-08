@@ -314,7 +314,7 @@ jobs:
             --image-id "$AMI_ID" \
             --instance-type t3.micro \
             --security-group-ids "$SG_ID" \
-            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Purpose,Value=AMI-Validation},{Key=Build,Value=${{ github.run_id }}]}" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Purpose,Value=AMI-Validation},{Key=Build,Value=${{ github.run_id }}}]" \
             --region ${{ env.PKR_VAR_aws_region }} \
             --query 'Instances[0].InstanceId' \
             --output text)
