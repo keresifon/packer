@@ -75,6 +75,8 @@ jobs:
           pip3 install ansible
 
       - name: Initialize Packer
+        env:
+          PACKER_GITHUB_API_TOKEN: ${{ github.token }}
         run: packer init ubuntu-golden-image.pkr.hcl
 
       - name: Validate Packer template
@@ -110,6 +112,8 @@ jobs:
           pip3 install ansible
 
       - name: Initialize Packer
+        env:
+          PACKER_GITHUB_API_TOKEN: ${{ github.token }}
         run: packer init ubuntu-golden-image.pkr.hcl
 
       - name: Build Packer image
