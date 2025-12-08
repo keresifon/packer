@@ -27,10 +27,10 @@
 
 - name: Display service status
   debug:
-    msg: "Service {{ item.item.name }}: {{ 'RUNNING' if item.status.ActiveState == 'active' else 'NOT RUNNING' }}"
+    msg: "Service {{ item.item }}: {{ 'RUNNING' if item.status.ActiveState == 'active' else 'NOT RUNNING' }}"
   loop: "{{ service_status.results }}"
   loop_control:
-    label: "{{ item.item.name }}"
+    label: "{{ item.item }}"
 
 - name: Test 4 - Verify AWS CLI is installed and working
   command: aws --version
