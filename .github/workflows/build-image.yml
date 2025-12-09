@@ -117,30 +117,79 @@ jobs:
             # Try installing via dnf first (RHEL package manager)
             if command -v dnf >/dev/null 2>&1; then
               echo "Attempting to install AWS CLI via dnf..."
-              dnf install -y awscli 2>&1 && {
-                aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
-              } || echo "dnf installation failed or not available, trying direct download..."
+              # Check if sudo is available, use it if possible
+              if command -v sudo >/dev/null 2>&1; then
+                sudo dnf install -y awscli 2>&1 && {
+                  aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
+                } || echo "dnf installation failed, trying direct download..."
+              else
+                dnf install -y awscli 2>&1 && {
+                  aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
+                } || echo "dnf installation failed (may need sudo), trying direct download..."
+              fi
             fi
             
-            # Download AWS CLI v2 installer with better error handling
-            curl -L -f "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" || {
-              echo "Failed to download AWS CLI, trying alternative method..."
-              # Alternative: try with wget if curl fails
-              wget -q "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -O "awscliv2.zip" || {
-                echo "Both curl and wget failed. Checking what was downloaded..."
-                ls -lh awscliv2.zip 2>/dev/null || echo "No file downloaded"
-                cat awscliv2.zip 2>/dev/null | head -20 || echo "Cannot read file"
-                exit 1
-              }
-            }
+            # Download AWS CLI v2 installer with retry logic
+            DOWNLOAD_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+            MAX_RETRIES=3
+            RETRY_DELAY=5
+            
+            for i in $(seq 1 $MAX_RETRIES); do
+              echo "Download attempt $i of $MAX_RETRIES..."
+              
+              # Try curl first
+              if curl -L -f --connect-timeout 30 --max-time 300 "$DOWNLOAD_URL" -o "awscliv2.zip" 2>&1; then
+                # Check if file was downloaded and has content
+                if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ]; then
+                  echo "Download successful, file size: $(ls -lh awscliv2.zip | awk '{print $5}')"
+                  break
+                else
+                  echo "Download completed but file is empty or missing"
+                  rm -f awscliv2.zip
+                fi
+              else
+                echo "curl download failed (attempt $i)"
+                rm -f awscliv2.zip
+              fi
+              
+              # If not last attempt, wait and try wget
+              if [ $i -lt $MAX_RETRIES ]; then
+                echo "Waiting ${RETRY_DELAY}s before retry..."
+                sleep $RETRY_DELAY
+                echo "Trying wget as alternative..."
+                if wget --timeout=30 --tries=1 "$DOWNLOAD_URL" -O "awscliv2.zip" 2>&1; then
+                  if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ]; then
+                    echo "Download successful via wget, file size: $(ls -lh awscliv2.zip | awk '{print $5}')"
+                    break
+                  else
+                    echo "wget download completed but file is empty"
+                    rm -f awscliv2.zip
+                  fi
+                fi
+              fi
+            done
+            
+            # Final verification
+            if [ ! -f "awscliv2.zip" ] || [ ! -s "awscliv2.zip" ]; then
+              echo "ERROR: Failed to download AWS CLI after $MAX_RETRIES attempts"
+              echo "Last error details:"
+              ls -lh awscliv2.zip 2>/dev/null || echo "No file exists"
+              if [ -f "awscliv2.zip" ]; then
+                echo "File size: $(stat -c%s awscliv2.zip) bytes"
+                echo "File type: $(file awscliv2.zip)"
+                echo "First 200 bytes:"
+                head -c 200 awscliv2.zip | od -c || echo "Cannot read file"
+              fi
+              exit 1
+            fi
             
             # Verify the downloaded file is actually a zip file
-            if ! file awscliv2.zip | grep -q "Zip archive"; then
+            if ! file awscliv2.zip | grep -qi "zip"; then
               echo "ERROR: Downloaded file is not a valid zip archive"
               echo "File type: $(file awscliv2.zip)"
               echo "File size: $(ls -lh awscliv2.zip | awk '{print $5}')"
-              echo "First 100 bytes:"
-              head -c 100 awscliv2.zip | od -c
+              echo "First 200 bytes:"
+              head -c 200 awscliv2.zip | od -c
               exit 1
             fi
             
@@ -259,30 +308,79 @@ jobs:
             # Try installing via dnf first (RHEL package manager)
             if command -v dnf >/dev/null 2>&1; then
               echo "Attempting to install AWS CLI via dnf..."
-              dnf install -y awscli 2>&1 && {
-                aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
-              } || echo "dnf installation failed or not available, trying direct download..."
+              # Check if sudo is available, use it if possible
+              if command -v sudo >/dev/null 2>&1; then
+                sudo dnf install -y awscli 2>&1 && {
+                  aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
+                } || echo "dnf installation failed, trying direct download..."
+              else
+                dnf install -y awscli 2>&1 && {
+                  aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
+                } || echo "dnf installation failed (may need sudo), trying direct download..."
+              fi
             fi
             
-            # Download AWS CLI v2 installer with better error handling
-            curl -L -f "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" || {
-              echo "Failed to download AWS CLI, trying alternative method..."
-              # Alternative: try with wget if curl fails
-              wget -q "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -O "awscliv2.zip" || {
-                echo "Both curl and wget failed. Checking what was downloaded..."
-                ls -lh awscliv2.zip 2>/dev/null || echo "No file downloaded"
-                cat awscliv2.zip 2>/dev/null | head -20 || echo "Cannot read file"
-                exit 1
-              }
-            }
+            # Download AWS CLI v2 installer with retry logic
+            DOWNLOAD_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+            MAX_RETRIES=3
+            RETRY_DELAY=5
+            
+            for i in $(seq 1 $MAX_RETRIES); do
+              echo "Download attempt $i of $MAX_RETRIES..."
+              
+              # Try curl first
+              if curl -L -f --connect-timeout 30 --max-time 300 "$DOWNLOAD_URL" -o "awscliv2.zip" 2>&1; then
+                # Check if file was downloaded and has content
+                if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ]; then
+                  echo "Download successful, file size: $(ls -lh awscliv2.zip | awk '{print $5}')"
+                  break
+                else
+                  echo "Download completed but file is empty or missing"
+                  rm -f awscliv2.zip
+                fi
+              else
+                echo "curl download failed (attempt $i)"
+                rm -f awscliv2.zip
+              fi
+              
+              # If not last attempt, wait and try wget
+              if [ $i -lt $MAX_RETRIES ]; then
+                echo "Waiting ${RETRY_DELAY}s before retry..."
+                sleep $RETRY_DELAY
+                echo "Trying wget as alternative..."
+                if wget --timeout=30 --tries=1 "$DOWNLOAD_URL" -O "awscliv2.zip" 2>&1; then
+                  if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ]; then
+                    echo "Download successful via wget, file size: $(ls -lh awscliv2.zip | awk '{print $5}')"
+                    break
+                  else
+                    echo "wget download completed but file is empty"
+                    rm -f awscliv2.zip
+                  fi
+                fi
+              fi
+            done
+            
+            # Final verification
+            if [ ! -f "awscliv2.zip" ] || [ ! -s "awscliv2.zip" ]; then
+              echo "ERROR: Failed to download AWS CLI after $MAX_RETRIES attempts"
+              echo "Last error details:"
+              ls -lh awscliv2.zip 2>/dev/null || echo "No file exists"
+              if [ -f "awscliv2.zip" ]; then
+                echo "File size: $(stat -c%s awscliv2.zip) bytes"
+                echo "File type: $(file awscliv2.zip)"
+                echo "First 200 bytes:"
+                head -c 200 awscliv2.zip | od -c || echo "Cannot read file"
+              fi
+              exit 1
+            fi
             
             # Verify the downloaded file is actually a zip file
-            if ! file awscliv2.zip | grep -q "Zip archive"; then
+            if ! file awscliv2.zip | grep -qi "zip"; then
               echo "ERROR: Downloaded file is not a valid zip archive"
               echo "File type: $(file awscliv2.zip)"
               echo "File size: $(ls -lh awscliv2.zip | awk '{print $5}')"
-              echo "First 100 bytes:"
-              head -c 100 awscliv2.zip | od -c
+              echo "First 200 bytes:"
+              head -c 200 awscliv2.zip | od -c
               exit 1
             fi
             
