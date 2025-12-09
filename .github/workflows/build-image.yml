@@ -79,14 +79,14 @@ jobs:
           else
             echo "Some packages missing, attempting installation..."
             # Try to install missing packages, but don't fail if dnf has issues
-            sudo dnf install -y jq unzip curl 2>&1 || {
+             dnf install -y jq unzip curl 2>&1 || {
               echo "dnf install encountered issues, checking what's available..."
               # Install jq manually if needed and dnf failed
               if ! command -v jq >/dev/null 2>&1; then
                 echo "Installing jq from GitHub releases..."
                 curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
                 chmod +x /tmp/jq
-                sudo mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+                 mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
               fi
             }
             # Verify what we have
@@ -102,9 +102,28 @@ jobs:
           # Download and install Packer
           curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
           unzip -q packer.zip
-          sudo mv packer /usr/local/bin/
+           mv packer /usr/local/bin/
           rm packer.zip
           packer version
+
+      - name: Install AWS CLI
+        run: |
+          # Check if AWS CLI is already installed
+          if command -v aws >/dev/null 2>&1; then
+            echo "AWS CLI is already installed"
+            aws --version
+          else
+            echo "Installing AWS CLI v2..."
+            # Download AWS CLI v2 installer
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip -q awscliv2.zip
+            # Install AWS CLI
+             ./aws/install
+            # Clean up
+            rm -rf aws awscliv2.zip
+            # Verify installation
+            aws --version
+          fi
 
       - name: Configure AWS Credentials (OIDC)
         run: |
@@ -159,14 +178,14 @@ jobs:
           else
             echo "Some packages missing, attempting installation..."
             # Try to install missing packages, but don't fail if dnf has issues
-            sudo dnf install -y jq unzip curl 2>&1 || {
+             dnf install -y jq unzip curl 2>&1 || {
               echo "dnf install encountered issues, checking what's available..."
               # Install jq manually if needed and dnf failed
               if ! command -v jq >/dev/null 2>&1; then
                 echo "Installing jq from GitHub releases..."
                 curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
                 chmod +x /tmp/jq
-                sudo mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+                 mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
               fi
             }
             # Verify what we have
@@ -182,9 +201,28 @@ jobs:
           # Download and install Packer
           curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
           unzip -q packer.zip
-          sudo mv packer /usr/local/bin/
+           mv packer /usr/local/bin/
           rm packer.zip
           packer version
+
+      - name: Install AWS CLI
+        run: |
+          # Check if AWS CLI is already installed
+          if command -v aws >/dev/null 2>&1; then
+            echo "AWS CLI is already installed"
+            aws --version
+          else
+            echo "Installing AWS CLI v2..."
+            # Download AWS CLI v2 installer
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip -q awscliv2.zip
+            # Install AWS CLI
+             ./aws/install
+            # Clean up
+            rm -rf aws awscliv2.zip
+            # Verify installation
+            aws --version
+          fi
 
       - name: Configure AWS Credentials (OIDC)
         run: |
