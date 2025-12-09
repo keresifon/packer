@@ -13,7 +13,7 @@ packer {
 variable "aws_region" {
   type        = string
   description = "AWS region to build the image in"
-  default     = "us-east-1"
+  default     = "ca-central-1"
 }
 
 # Variables - Image Configuration

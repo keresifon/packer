@@ -14,7 +14,7 @@ on:
       aws_region:
         description: 'AWS region'
         required: false
-        default: 'us-east-1'
+        default: 'ca-central-1'
         type: string
   push:
     branches:
@@ -27,7 +27,7 @@ on:
       - main
 
 env:
-  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'ca-central-1' }}
   PKR_VAR_ubuntu_version: ${{ github.event.inputs.ubuntu_version || '22.04' }}
   PKR_VAR_vpc_id: ${{ vars.VPC_ID || '' }}
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
