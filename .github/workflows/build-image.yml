@@ -107,23 +107,50 @@ jobs:
 
       - name: Configure AWS Credentials
         run: |
-          # Set AWS credentials as environment variables for subsequent steps
-          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
-          echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-          echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-          
-          # Verify credentials are set (check after setting to GITHUB_ENV)
+          # Verify secrets are configured (before setting to GITHUB_ENV)
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
-            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured."
+            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured in GitHub Secrets."
+            echo "Please go to Settings > Secrets and variables > Actions and add AWS_ACCESS_KEY_ID"
             exit 1
           fi
           if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
-            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured."
+            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured in GitHub Secrets."
+            echo "Please go to Settings > Secrets and variables > Actions and add AWS_SECRET_ACCESS_KEY"
             exit 1
           fi
+          
+          # Trim whitespace and set AWS credentials as environment variables for subsequent steps
+          ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
+          SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
+          
+          echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          
+          # Basic format validation (without exposing values)
+          ACCESS_KEY_LEN=${#ACCESS_KEY}
+          SECRET_KEY_LEN=${#SECRET_KEY}
+          
+          if [ $ACCESS_KEY_LEN -lt 16 ] || [ $ACCESS_KEY_LEN -gt 128 ]; then
+            echo "WARNING: AWS_ACCESS_KEY_ID length is ${ACCESS_KEY_LEN} characters (expected 16-128)"
+            echo "This may indicate an invalid or incorrectly formatted access key"
+          fi
+          
+          if [ $SECRET_KEY_LEN -lt 40 ]; then
+            echo "WARNING: AWS_SECRET_ACCESS_KEY length is ${SECRET_KEY_LEN} characters (expected 40+)"
+            echo "This may indicate an invalid or incorrectly formatted secret key"
+          fi
+          
           echo "✅ AWS credentials configured successfully"
           echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
+          echo "Note: Credentials will be validated by Packer during execution"
+          echo ""
+          echo "If you see 'InvalidClientTokenId' errors, please verify:"
+          echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
+          echo "2. Credentials are active and not expired"
+          echo "3. IAM user has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
+          echo "4. No extra whitespace or newlines in the secret values"
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
@@ -182,23 +209,50 @@ jobs:
 
       - name: Configure AWS Credentials
         run: |
-          # Set AWS credentials as environment variables for subsequent steps
-          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
-          echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-          echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-          
-          # Verify credentials are set (check after setting to GITHUB_ENV)
+          # Verify secrets are configured (before setting to GITHUB_ENV)
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
-            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured."
+            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured in GitHub Secrets."
+            echo "Please go to Settings > Secrets and variables > Actions and add AWS_ACCESS_KEY_ID"
             exit 1
           fi
           if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
-            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured."
+            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured in GitHub Secrets."
+            echo "Please go to Settings > Secrets and variables > Actions and add AWS_SECRET_ACCESS_KEY"
             exit 1
           fi
+          
+          # Trim whitespace and set AWS credentials as environment variables for subsequent steps
+          ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
+          SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
+          
+          echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          
+          # Basic format validation (without exposing values)
+          ACCESS_KEY_LEN=${#ACCESS_KEY}
+          SECRET_KEY_LEN=${#SECRET_KEY}
+          
+          if [ $ACCESS_KEY_LEN -lt 16 ] || [ $ACCESS_KEY_LEN -gt 128 ]; then
+            echo "WARNING: AWS_ACCESS_KEY_ID length is ${ACCESS_KEY_LEN} characters (expected 16-128)"
+            echo "This may indicate an invalid or incorrectly formatted access key"
+          fi
+          
+          if [ $SECRET_KEY_LEN -lt 40 ]; then
+            echo "WARNING: AWS_SECRET_ACCESS_KEY length is ${SECRET_KEY_LEN} characters (expected 40+)"
+            echo "This may indicate an invalid or incorrectly formatted secret key"
+          fi
+          
           echo "✅ AWS credentials configured successfully"
           echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
+          echo "Note: Credentials will be validated by Packer during execution"
+          echo ""
+          echo "If you see 'InvalidClientTokenId' errors, please verify:"
+          echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
+          echo "2. Credentials are active and not expired"
+          echo "3. IAM user has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
+          echo "4. No extra whitespace or newlines in the secret values"
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
