@@ -118,48 +118,73 @@ jobs:
             if command -v pip3 >/dev/null 2>&1 || command -v pip >/dev/null 2>&1; then
               PIP_CMD=$(command -v pip3 || command -v pip)
               echo "Attempting to install AWS CLI via pip..."
-              $PIP_CMD install --user awscli 2>&1 && {
+              # Clear any conflicting pip environment variables
+              unset PIP_TARGET PIP_USER
+              # Try with --user flag, handle SSL issues with trusted-host
+              $PIP_CMD install --user --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org awscli 2>&1 && {
                 # Add user bin to PATH for subsequent steps
                 echo "$HOME/.local/bin" >> $GITHUB_PATH
                 export PATH="$HOME/.local/bin:$PATH"
                 aws --version && echo "AWS CLI installed via pip successfully" && exit 0
-              } || echo "pip installation failed, trying dnf..."
+              } || {
+                echo "pip --user install failed, trying without --user flag..."
+                # Try installing to a local directory instead
+                mkdir -p ./local-aws-cli
+                $PIP_CMD install --target ./local-aws-cli --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org awscli 2>&1 && {
+                  export PATH="$(pwd)/local-aws-cli/bin:$PATH"
+                  echo "$(pwd)/local-aws-cli/bin" >> $GITHUB_PATH
+                  aws --version && echo "AWS CLI installed via pip (local) successfully" && exit 0
+                } || echo "pip installation failed, trying dnf..."
+              }
             fi
             
             # Try installing via dnf (RHEL package manager)
             if command -v dnf >/dev/null 2>&1; then
               echo "Attempting to install AWS CLI via dnf..."
-              # Check if sudo is available, use it if possible
-              if command -v sudo >/dev/null 2>&1; then
+              # Check if we can use dnf without sudo first (some runners allow this)
+              if dnf install -y awscli 2>&1; then
+                aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
+              elif command -v sudo >/dev/null 2>&1; then
+                # Try with sudo
+                echo "dnf without sudo failed, trying with sudo..."
                 sudo dnf install -y awscli 2>&1 && {
                   aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
                 } || echo "dnf installation failed, trying direct download..."
               else
-                dnf install -y awscli 2>&1 && {
-                  aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
-                } || echo "dnf installation failed (may need sudo), trying direct download..."
+                echo "dnf installation failed (no sudo available), trying direct download..."
               fi
             fi
             
             # Fallback: Download AWS CLI v2 installer (last resort)
             echo "Attempting direct download of AWS CLI v2..."
             DOWNLOAD_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+            MAX_DOWNLOAD_RETRIES=3
+            RETRY_DELAY=5
             
-            if curl -L -f --connect-timeout 30 --max-time 300 "$DOWNLOAD_URL" -o "awscliv2.zip" 2>&1; then
-              if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ] && file awscliv2.zip | grep -qi "zip"; then
-                echo "Download successful, installing..."
-                unzip -q awscliv2.zip
-                ./aws/install
-                rm -rf aws awscliv2.zip
-                aws --version || exit 1
+            for attempt in $(seq 1 $MAX_DOWNLOAD_RETRIES); do
+              echo "Download attempt $attempt of $MAX_DOWNLOAD_RETRIES..."
+              if curl -L -f --connect-timeout 30 --max-time 300 "$DOWNLOAD_URL" -o "awscliv2.zip" 2>&1; then
+                if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ] && file awscliv2.zip | grep -qi "zip"; then
+                  echo "Download successful, installing..."
+                  unzip -q awscliv2.zip
+                  ./aws/install
+                  rm -rf aws awscliv2.zip
+                  aws --version && exit 0 || exit 1
+                else
+                  echo "Downloaded file is invalid or empty, retrying..."
+                  rm -f awscliv2.zip
+                fi
               else
-                echo "Downloaded file is invalid or empty"
-                exit 1
+                echo "Download failed (attempt $attempt), retrying in ${RETRY_DELAY}s..."
+                rm -f awscliv2.zip
+                if [ $attempt -lt $MAX_DOWNLOAD_RETRIES ]; then
+                  sleep $RETRY_DELAY
+                fi
               fi
-            else
-              echo "ERROR: All installation methods failed (pip, dnf, direct download)"
-              exit 1
-            fi
+            done
+            
+            echo "ERROR: All installation methods failed (pip, dnf, direct download)"
+            exit 1
           fi
 
       - name: Configure AWS Credentials (OIDC)
@@ -254,48 +279,73 @@ jobs:
             if command -v pip3 >/dev/null 2>&1 || command -v pip >/dev/null 2>&1; then
               PIP_CMD=$(command -v pip3 || command -v pip)
               echo "Attempting to install AWS CLI via pip..."
-              $PIP_CMD install --user awscli 2>&1 && {
+              # Clear any conflicting pip environment variables
+              unset PIP_TARGET PIP_USER
+              # Try with --user flag, handle SSL issues with trusted-host
+              $PIP_CMD install --user --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org awscli 2>&1 && {
                 # Add user bin to PATH for subsequent steps
                 echo "$HOME/.local/bin" >> $GITHUB_PATH
                 export PATH="$HOME/.local/bin:$PATH"
                 aws --version && echo "AWS CLI installed via pip successfully" && exit 0
-              } || echo "pip installation failed, trying dnf..."
+              } || {
+                echo "pip --user install failed, trying without --user flag..."
+                # Try installing to a local directory instead
+                mkdir -p ./local-aws-cli
+                $PIP_CMD install --target ./local-aws-cli --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org awscli 2>&1 && {
+                  export PATH="$(pwd)/local-aws-cli/bin:$PATH"
+                  echo "$(pwd)/local-aws-cli/bin" >> $GITHUB_PATH
+                  aws --version && echo "AWS CLI installed via pip (local) successfully" && exit 0
+                } || echo "pip installation failed, trying dnf..."
+              }
             fi
             
             # Try installing via dnf (RHEL package manager)
             if command -v dnf >/dev/null 2>&1; then
               echo "Attempting to install AWS CLI via dnf..."
-              # Check if sudo is available, use it if possible
-              if command -v sudo >/dev/null 2>&1; then
+              # Check if we can use dnf without sudo first (some runners allow this)
+              if dnf install -y awscli 2>&1; then
+                aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
+              elif command -v sudo >/dev/null 2>&1; then
+                # Try with sudo
+                echo "dnf without sudo failed, trying with sudo..."
                 sudo dnf install -y awscli 2>&1 && {
                   aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
                 } || echo "dnf installation failed, trying direct download..."
               else
-                dnf install -y awscli 2>&1 && {
-                  aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
-                } || echo "dnf installation failed (may need sudo), trying direct download..."
+                echo "dnf installation failed (no sudo available), trying direct download..."
               fi
             fi
             
             # Fallback: Download AWS CLI v2 installer (last resort)
             echo "Attempting direct download of AWS CLI v2..."
             DOWNLOAD_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+            MAX_DOWNLOAD_RETRIES=3
+            RETRY_DELAY=5
             
-            if curl -L -f --connect-timeout 30 --max-time 300 "$DOWNLOAD_URL" -o "awscliv2.zip" 2>&1; then
-              if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ] && file awscliv2.zip | grep -qi "zip"; then
-                echo "Download successful, installing..."
-                unzip -q awscliv2.zip
-                ./aws/install
-                rm -rf aws awscliv2.zip
-                aws --version || exit 1
+            for attempt in $(seq 1 $MAX_DOWNLOAD_RETRIES); do
+              echo "Download attempt $attempt of $MAX_DOWNLOAD_RETRIES..."
+              if curl -L -f --connect-timeout 30 --max-time 300 "$DOWNLOAD_URL" -o "awscliv2.zip" 2>&1; then
+                if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ] && file awscliv2.zip | grep -qi "zip"; then
+                  echo "Download successful, installing..."
+                  unzip -q awscliv2.zip
+                  ./aws/install
+                  rm -rf aws awscliv2.zip
+                  aws --version && exit 0 || exit 1
+                else
+                  echo "Downloaded file is invalid or empty, retrying..."
+                  rm -f awscliv2.zip
+                fi
               else
-                echo "Downloaded file is invalid or empty"
-                exit 1
+                echo "Download failed (attempt $attempt), retrying in ${RETRY_DELAY}s..."
+                rm -f awscliv2.zip
+                if [ $attempt -lt $MAX_DOWNLOAD_RETRIES ]; then
+                  sleep $RETRY_DELAY
+                fi
               fi
-            else
-              echo "ERROR: All installation methods failed (pip, dnf, direct download)"
-              exit 1
-            fi
+            done
+            
+            echo "ERROR: All installation methods failed (pip, dnf, direct download)"
+            exit 1
           fi
 
       - name: Configure AWS Credentials (OIDC)
