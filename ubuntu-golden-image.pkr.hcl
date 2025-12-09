@@ -75,6 +75,8 @@ source "amazon-ebs" "ubuntu" {
   ssh_username  = var.ssh_username
   
   # VPC configuration (optional - only set if provided)
+  # Note: If subnet_id is specified, vpc_id must also be specified
+  # The subnet must exist in the specified VPC and region
   vpc_id    = var.vpc_id != "" ? var.vpc_id : null
   subnet_id = var.subnet_id != "" ? var.subnet_id : null
 

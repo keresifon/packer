@@ -281,6 +281,37 @@ jobs:
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
 
+      - name: Validate VPC and Subnet Configuration
+        run: |
+          VPC_ID="${{ env.PKR_VAR_vpc_id }}"
+          SUBNET_ID="${{ env.PKR_VAR_subnet_id }}"
+          REGION="${{ env.PKR_VAR_aws_region }}"
+          
+          echo "=== VPC and Subnet Configuration ==="
+          echo "Region: ${REGION}"
+          echo "VPC ID: ${VPC_ID:-'Not specified (will use default VPC if available)'}"
+          echo "Subnet ID: ${SUBNET_ID:-'Not specified (will use default subnet if available)'}"
+          echo ""
+          
+          # Validation: If subnet is specified, VPC must also be specified
+          if [ -n "$SUBNET_ID" ] && [ -z "$VPC_ID" ]; then
+            echo "❌ ERROR: Subnet ID is specified but VPC ID is not."
+            echo "Packer requires both VPC ID and Subnet ID to be specified together."
+            echo "The subnet must belong to the specified VPC."
+            echo ""
+            echo "Solution: Set VPC_ID repository variable, or remove SUBNET_ID to use default VPC/subnet."
+            exit 1
+          fi
+          
+          if [ -n "$VPC_ID" ] && [ -n "$SUBNET_ID" ]; then
+            echo "✅ Both VPC and Subnet IDs are configured"
+            echo "⚠️  Important: Ensure the subnet '$SUBNET_ID' exists in VPC '$VPC_ID' in region '$REGION'"
+            echo ""
+            echo "To verify, run:"
+            echo "  aws ec2 describe-subnets --subnet-ids $SUBNET_ID --region $REGION --query 'Subnets[0].VpcId'"
+            echo "  (Should return: $VPC_ID)"
+          fi
+
       - name: Build Packer image
         run: |
           PACKER_BUILD_CMD="packer build \
@@ -288,6 +319,7 @@ jobs:
             -var=\"ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}\""
           
           # Add VPC and subnet variables if provided
+          # Note: If subnet_id is provided, vpc_id should also be provided
           if [ -n "${{ env.PKR_VAR_vpc_id }}" ]; then
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"vpc_id=${{ env.PKR_VAR_vpc_id }}\""
             echo "Using VPC ID: ${{ env.PKR_VAR_vpc_id }}"
