@@ -41,6 +41,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Inspect Runner Environment
+        run: |
+          echo "=== Runner OS Information ==="
+          uname -a
+          cat /etc/os-release
+          echo ""
+          echo "=== Available Shells ==="
+          cat /etc/shells
+          echo ""
+          echo "=== Pre-installed Tools ==="
+          echo "curl: $(which curl || echo 'not found')"
+          echo "wget: $(which wget || echo 'not found')"
+          echo "unzip: $(which unzip || echo 'not found')"
+          echo "jq: $(which jq || echo 'not found')"
+          echo "aws: $(which aws || echo 'not found')"
+          echo "git: $(which git || echo 'not found')"
+          echo ""
+          echo "=== Environment Variables ==="
+          env | grep -E '^(PATH|HOME|USER|SHELL|RUNNER)' | sort
+          echo ""
+          echo "=== PATH ==="
+          echo $PATH
+
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq unzip curl
 
