@@ -29,6 +29,8 @@ on:
 env:
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
   PKR_VAR_ubuntu_version: ${{ github.event.inputs.ubuntu_version || '22.04' }}
+  PKR_VAR_vpc_id: ${{ vars.VPC_ID || '' }}
+  PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
 
 jobs:
   validate:
@@ -281,10 +283,22 @@ jobs:
 
       - name: Build Packer image
         run: |
-          packer build \
-            -var="aws_region=${{ env.PKR_VAR_aws_region }}" \
-            -var="ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}" \
-            ubuntu-golden-image.pkr.hcl
+          PACKER_BUILD_CMD="packer build \
+            -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\" \
+            -var=\"ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}\""
+          
+          # Add VPC and subnet variables if provided
+          if [ -n "${{ env.PKR_VAR_vpc_id }}" ]; then
+            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"vpc_id=${{ env.PKR_VAR_vpc_id }}\""
+            echo "Using VPC ID: ${{ env.PKR_VAR_vpc_id }}"
+          fi
+          if [ -n "${{ env.PKR_VAR_subnet_id }}" ]; then
+            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"subnet_id=${{ env.PKR_VAR_subnet_id }}\""
+            echo "Using Subnet ID: ${{ env.PKR_VAR_subnet_id }}"
+          fi
+          
+          PACKER_BUILD_CMD="${PACKER_BUILD_CMD} ubuntu-golden-image.pkr.hcl"
+          eval $PACKER_BUILD_CMD
 
       - name: Output AMI ID
         if: success()

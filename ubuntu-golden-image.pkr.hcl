@@ -41,6 +41,18 @@ variable "ssh_username" {
   default     = "ubuntu"
 }
 
+variable "vpc_id" {
+  type        = string
+  description = "VPC ID to launch instance in (optional - will use default VPC if not specified)"
+  default     = ""
+}
+
+variable "subnet_id" {
+  type        = string
+  description = "Subnet ID to launch instance in (optional - will use default subnet if not specified)"
+  default     = ""
+}
+
 # Data source for latest Ubuntu AMI
 data "amazon-ami" "ubuntu" {
   filters = {
@@ -61,6 +73,10 @@ source "amazon-ebs" "ubuntu" {
   region        = var.aws_region
   source_ami    = data.amazon-ami.ubuntu.id
   ssh_username  = var.ssh_username
+  
+  # VPC configuration (optional - only set if provided)
+  vpc_id    = var.vpc_id != "" ? var.vpc_id : null
+  subnet_id = var.subnet_id != "" ? var.subnet_id : null
 
   # Tags for the AMI
   tags = {
