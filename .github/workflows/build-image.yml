@@ -35,7 +35,6 @@ jobs:
     name: Validate Packer Template
     runs-on: terraform
     permissions:
-      id-token: write  # Required for OIDC
       contents: read
     steps:
       - name: Checkout code
@@ -106,110 +105,25 @@ jobs:
           rm packer.zip
           packer version
 
-      - name: Install AWS CLI
+      - name: Configure AWS Credentials
         run: |
-          # Check if AWS CLI is already installed
-          if command -v aws >/dev/null 2>&1; then
-            echo "AWS CLI is already installed"
-            aws --version
-          else
-            echo "Installing AWS CLI..."
-            # Try pip installation first (simplest and most reliable)
-            if command -v pip3 >/dev/null 2>&1 || command -v pip >/dev/null 2>&1; then
-              PIP_CMD=$(command -v pip3 || command -v pip)
-              echo "Attempting to install AWS CLI via pip..."
-              # Clear any conflicting pip environment variables
-              unset PIP_TARGET PIP_USER
-              # Try with --user flag, handle SSL issues with trusted-host
-              $PIP_CMD install --user --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org awscli 2>&1 && {
-                # Add user bin to PATH for subsequent steps
-                echo "$HOME/.local/bin" >> $GITHUB_PATH
-                export PATH="$HOME/.local/bin:$PATH"
-                aws --version && echo "AWS CLI installed via pip successfully" && exit 0
-              } || {
-                echo "pip --user install failed, trying without --user flag..."
-                # Try installing to a local directory instead
-                mkdir -p ./local-aws-cli
-                $PIP_CMD install --target ./local-aws-cli --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org awscli 2>&1 && {
-                  export PATH="$(pwd)/local-aws-cli/bin:$PATH"
-                  echo "$(pwd)/local-aws-cli/bin" >> $GITHUB_PATH
-                  aws --version && echo "AWS CLI installed via pip (local) successfully" && exit 0
-                } || echo "pip installation failed, trying dnf..."
-              }
-            fi
-            
-            # Try installing via dnf (RHEL package manager)
-            if command -v dnf >/dev/null 2>&1; then
-              echo "Attempting to install AWS CLI via dnf..."
-              # Check if we can use dnf without sudo first (some runners allow this)
-              if dnf install -y awscli 2>&1; then
-                aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
-              elif command -v sudo >/dev/null 2>&1; then
-                # Try with sudo
-                echo "dnf without sudo failed, trying with sudo..."
-                sudo dnf install -y awscli 2>&1 && {
-                  aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
-                } || echo "dnf installation failed, trying direct download..."
-              else
-                echo "dnf installation failed (no sudo available), trying direct download..."
-              fi
-            fi
-            
-            # Fallback: Download AWS CLI v2 installer (last resort)
-            echo "Attempting direct download of AWS CLI v2..."
-            DOWNLOAD_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
-            MAX_DOWNLOAD_RETRIES=3
-            RETRY_DELAY=5
-            
-            for attempt in $(seq 1 $MAX_DOWNLOAD_RETRIES); do
-              echo "Download attempt $attempt of $MAX_DOWNLOAD_RETRIES..."
-              if curl -L -f --connect-timeout 30 --max-time 300 "$DOWNLOAD_URL" -o "awscliv2.zip" 2>&1; then
-                if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ] && file awscliv2.zip | grep -qi "zip"; then
-                  echo "Download successful, installing..."
-                  unzip -q awscliv2.zip
-                  ./aws/install
-                  rm -rf aws awscliv2.zip
-                  aws --version && exit 0 || exit 1
-                else
-                  echo "Downloaded file is invalid or empty, retrying..."
-                  rm -f awscliv2.zip
-                fi
-              else
-                echo "Download failed (attempt $attempt), retrying in ${RETRY_DELAY}s..."
-                rm -f awscliv2.zip
-                if [ $attempt -lt $MAX_DOWNLOAD_RETRIES ]; then
-                  sleep $RETRY_DELAY
-                fi
-              fi
-            done
-            
-            echo "ERROR: All installation methods failed (pip, dnf, direct download)"
-            exit 1
-          fi
-
-      - name: Configure AWS Credentials (OIDC)
-        run: |
-          # Request OIDC token from GitHub Actions
-          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
-          
-          # Assume AWS role using OIDC token
-          AWS_CREDS=$(aws sts assume-role-with-web-identity \
-            --role-arn ${{ secrets.AWS_ROLE_ARN }} \
-            --role-session-name github-actions-packer-validate \
-            --web-identity-token "$OIDC_TOKEN" \
-            --duration-seconds 3600 \
-            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
-            --output text)
-          
           # Set AWS credentials as environment variables for subsequent steps
-          echo "AWS_ACCESS_KEY_ID=$(echo $AWS_CREDS | awk '{print $1}')" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=$(echo $AWS_CREDS | awk '{print $2}')" >> $GITHUB_ENV
-          echo "AWS_SESSION_TOKEN=$(echo $AWS_CREDS | awk '{print $3}')" >> $GITHUB_ENV
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           
-          # Verify AWS credentials
-          aws sts get-caller-identity
+          # Verify credentials are set (check after setting to GITHUB_ENV)
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured."
+            exit 1
+          fi
+          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured."
+            exit 1
+          fi
+          echo "✅ AWS credentials configured successfully"
+          echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
@@ -223,7 +137,6 @@ jobs:
     runs-on: terraform
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     permissions:
-      id-token: write  # Required for OIDC
       contents: read
     steps:
       - name: Checkout code
@@ -267,110 +180,25 @@ jobs:
           rm packer.zip
           packer version
 
-      - name: Install AWS CLI
+      - name: Configure AWS Credentials
         run: |
-          # Check if AWS CLI is already installed
-          if command -v aws >/dev/null 2>&1; then
-            echo "AWS CLI is already installed"
-            aws --version
-          else
-            echo "Installing AWS CLI..."
-            # Try pip installation first (simplest and most reliable)
-            if command -v pip3 >/dev/null 2>&1 || command -v pip >/dev/null 2>&1; then
-              PIP_CMD=$(command -v pip3 || command -v pip)
-              echo "Attempting to install AWS CLI via pip..."
-              # Clear any conflicting pip environment variables
-              unset PIP_TARGET PIP_USER
-              # Try with --user flag, handle SSL issues with trusted-host
-              $PIP_CMD install --user --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org awscli 2>&1 && {
-                # Add user bin to PATH for subsequent steps
-                echo "$HOME/.local/bin" >> $GITHUB_PATH
-                export PATH="$HOME/.local/bin:$PATH"
-                aws --version && echo "AWS CLI installed via pip successfully" && exit 0
-              } || {
-                echo "pip --user install failed, trying without --user flag..."
-                # Try installing to a local directory instead
-                mkdir -p ./local-aws-cli
-                $PIP_CMD install --target ./local-aws-cli --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org awscli 2>&1 && {
-                  export PATH="$(pwd)/local-aws-cli/bin:$PATH"
-                  echo "$(pwd)/local-aws-cli/bin" >> $GITHUB_PATH
-                  aws --version && echo "AWS CLI installed via pip (local) successfully" && exit 0
-                } || echo "pip installation failed, trying dnf..."
-              }
-            fi
-            
-            # Try installing via dnf (RHEL package manager)
-            if command -v dnf >/dev/null 2>&1; then
-              echo "Attempting to install AWS CLI via dnf..."
-              # Check if we can use dnf without sudo first (some runners allow this)
-              if dnf install -y awscli 2>&1; then
-                aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
-              elif command -v sudo >/dev/null 2>&1; then
-                # Try with sudo
-                echo "dnf without sudo failed, trying with sudo..."
-                sudo dnf install -y awscli 2>&1 && {
-                  aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
-                } || echo "dnf installation failed, trying direct download..."
-              else
-                echo "dnf installation failed (no sudo available), trying direct download..."
-              fi
-            fi
-            
-            # Fallback: Download AWS CLI v2 installer (last resort)
-            echo "Attempting direct download of AWS CLI v2..."
-            DOWNLOAD_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
-            MAX_DOWNLOAD_RETRIES=3
-            RETRY_DELAY=5
-            
-            for attempt in $(seq 1 $MAX_DOWNLOAD_RETRIES); do
-              echo "Download attempt $attempt of $MAX_DOWNLOAD_RETRIES..."
-              if curl -L -f --connect-timeout 30 --max-time 300 "$DOWNLOAD_URL" -o "awscliv2.zip" 2>&1; then
-                if [ -f "awscliv2.zip" ] && [ -s "awscliv2.zip" ] && file awscliv2.zip | grep -qi "zip"; then
-                  echo "Download successful, installing..."
-                  unzip -q awscliv2.zip
-                  ./aws/install
-                  rm -rf aws awscliv2.zip
-                  aws --version && exit 0 || exit 1
-                else
-                  echo "Downloaded file is invalid or empty, retrying..."
-                  rm -f awscliv2.zip
-                fi
-              else
-                echo "Download failed (attempt $attempt), retrying in ${RETRY_DELAY}s..."
-                rm -f awscliv2.zip
-                if [ $attempt -lt $MAX_DOWNLOAD_RETRIES ]; then
-                  sleep $RETRY_DELAY
-                fi
-              fi
-            done
-            
-            echo "ERROR: All installation methods failed (pip, dnf, direct download)"
-            exit 1
-          fi
-
-      - name: Configure AWS Credentials (OIDC)
-        run: |
-          # Request OIDC token from GitHub Actions
-          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
-          
-          # Assume AWS role using OIDC token
-          AWS_CREDS=$(aws sts assume-role-with-web-identity \
-            --role-arn ${{ secrets.AWS_ROLE_ARN }} \
-            --role-session-name github-actions-packer-build \
-            --web-identity-token "$OIDC_TOKEN" \
-            --duration-seconds 3600 \
-            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
-            --output text)
-          
           # Set AWS credentials as environment variables for subsequent steps
-          echo "AWS_ACCESS_KEY_ID=$(echo $AWS_CREDS | awk '{print $1}')" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=$(echo $AWS_CREDS | awk '{print $2}')" >> $GITHUB_ENV
-          echo "AWS_SESSION_TOKEN=$(echo $AWS_CREDS | awk '{print $3}')" >> $GITHUB_ENV
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           
-          # Verify AWS credentials
-          aws sts get-caller-identity
+          # Verify credentials are set (check after setting to GITHUB_ENV)
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured."
+            exit 1
+          fi
+          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured."
+            exit 1
+          fi
+          echo "✅ AWS credentials configured successfully"
+          echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
