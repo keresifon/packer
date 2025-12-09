@@ -69,7 +69,32 @@ jobs:
           echo $PATH
 
       - name: Install dependencies
-        run: sudo dnf install -y jq unzip curl
+        run: |
+          # Check if packages are already installed
+          if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+            echo "All required packages (jq, unzip, curl) are already installed"
+            jq --version
+            unzip -v | head -1
+            curl --version | head -1
+          else
+            echo "Some packages missing, attempting installation..."
+            # Try to install missing packages, but don't fail if dnf has issues
+            sudo dnf install -y jq unzip curl 2>&1 || {
+              echo "dnf install encountered issues, checking what's available..."
+              # Install jq manually if needed and dnf failed
+              if ! command -v jq >/dev/null 2>&1; then
+                echo "Installing jq from GitHub releases..."
+                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
+                chmod +x /tmp/jq
+                sudo mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+              fi
+            }
+            # Verify what we have
+            echo "Final status:"
+            command -v jq && jq --version || echo "jq: not available"
+            command -v unzip && unzip -v | head -1 || echo "unzip: not available"
+            command -v curl && curl --version | head -1 || echo "curl: not available"
+          fi
 
       - name: Setup Packer
         run: |
@@ -124,7 +149,32 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo dnf install -y jq unzip curl
+        run: |
+          # Check if packages are already installed
+          if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+            echo "All required packages (jq, unzip, curl) are already installed"
+            jq --version
+            unzip -v | head -1
+            curl --version | head -1
+          else
+            echo "Some packages missing, attempting installation..."
+            # Try to install missing packages, but don't fail if dnf has issues
+            sudo dnf install -y jq unzip curl 2>&1 || {
+              echo "dnf install encountered issues, checking what's available..."
+              # Install jq manually if needed and dnf failed
+              if ! command -v jq >/dev/null 2>&1; then
+                echo "Installing jq from GitHub releases..."
+                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
+                chmod +x /tmp/jq
+                sudo mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+              fi
+            }
+            # Verify what we have
+            echo "Final status:"
+            command -v jq && jq --version || echo "jq: not available"
+            command -v unzip && unzip -v | head -1 || echo "unzip: not available"
+            command -v curl && curl --version | head -1 || echo "curl: not available"
+          fi
 
       - name: Setup Packer
         run: |
