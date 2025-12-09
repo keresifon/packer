@@ -114,15 +114,58 @@ jobs:
             aws --version
           else
             echo "Installing AWS CLI v2..."
-            # Download AWS CLI v2 installer
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            unzip -q awscliv2.zip
-            # Install AWS CLI
-             ./aws/install
+            # Try installing via dnf first (RHEL package manager)
+            if command -v dnf >/dev/null 2>&1; then
+              echo "Attempting to install AWS CLI via dnf..."
+              dnf install -y awscli 2>&1 && {
+                aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
+              } || echo "dnf installation failed or not available, trying direct download..."
+            fi
+            
+            # Download AWS CLI v2 installer with better error handling
+            curl -L -f "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" || {
+              echo "Failed to download AWS CLI, trying alternative method..."
+              # Alternative: try with wget if curl fails
+              wget -q "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -O "awscliv2.zip" || {
+                echo "Both curl and wget failed. Checking what was downloaded..."
+                ls -lh awscliv2.zip 2>/dev/null || echo "No file downloaded"
+                cat awscliv2.zip 2>/dev/null | head -20 || echo "Cannot read file"
+                exit 1
+              }
+            }
+            
+            # Verify the downloaded file is actually a zip file
+            if ! file awscliv2.zip | grep -q "Zip archive"; then
+              echo "ERROR: Downloaded file is not a valid zip archive"
+              echo "File type: $(file awscliv2.zip)"
+              echo "File size: $(ls -lh awscliv2.zip | awk '{print $5}')"
+              echo "First 100 bytes:"
+              head -c 100 awscliv2.zip | od -c
+              exit 1
+            fi
+            
+            echo "Downloaded file verified as zip archive, size: $(ls -lh awscliv2.zip | awk '{print $5}')"
+            
+            # Unzip the installer
+            unzip -q awscliv2.zip || {
+              echo "Failed to unzip AWS CLI installer"
+              exit 1
+            }
+            
+            # Install AWS CLI (installer handles its own installation)
+            ./aws/install || {
+              echo "AWS CLI installation failed"
+              exit 1
+            }
+            
             # Clean up
             rm -rf aws awscliv2.zip
+            
             # Verify installation
-            aws --version
+            aws --version || {
+              echo "AWS CLI installation verification failed"
+              exit 1
+            }
           fi
 
       - name: Configure AWS Credentials (OIDC)
@@ -213,15 +256,58 @@ jobs:
             aws --version
           else
             echo "Installing AWS CLI v2..."
-            # Download AWS CLI v2 installer
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            unzip -q awscliv2.zip
-            # Install AWS CLI
-             ./aws/install
+            # Try installing via dnf first (RHEL package manager)
+            if command -v dnf >/dev/null 2>&1; then
+              echo "Attempting to install AWS CLI via dnf..."
+              dnf install -y awscli 2>&1 && {
+                aws --version && echo "AWS CLI installed via dnf successfully" && exit 0
+              } || echo "dnf installation failed or not available, trying direct download..."
+            fi
+            
+            # Download AWS CLI v2 installer with better error handling
+            curl -L -f "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" || {
+              echo "Failed to download AWS CLI, trying alternative method..."
+              # Alternative: try with wget if curl fails
+              wget -q "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -O "awscliv2.zip" || {
+                echo "Both curl and wget failed. Checking what was downloaded..."
+                ls -lh awscliv2.zip 2>/dev/null || echo "No file downloaded"
+                cat awscliv2.zip 2>/dev/null | head -20 || echo "Cannot read file"
+                exit 1
+              }
+            }
+            
+            # Verify the downloaded file is actually a zip file
+            if ! file awscliv2.zip | grep -q "Zip archive"; then
+              echo "ERROR: Downloaded file is not a valid zip archive"
+              echo "File type: $(file awscliv2.zip)"
+              echo "File size: $(ls -lh awscliv2.zip | awk '{print $5}')"
+              echo "First 100 bytes:"
+              head -c 100 awscliv2.zip | od -c
+              exit 1
+            fi
+            
+            echo "Downloaded file verified as zip archive, size: $(ls -lh awscliv2.zip | awk '{print $5}')"
+            
+            # Unzip the installer
+            unzip -q awscliv2.zip || {
+              echo "Failed to unzip AWS CLI installer"
+              exit 1
+            }
+            
+            # Install AWS CLI (installer handles its own installation)
+            ./aws/install || {
+              echo "AWS CLI installation failed"
+              exit 1
+            }
+            
             # Clean up
             rm -rf aws awscliv2.zip
+            
             # Verify installation
-            aws --version
+            aws --version || {
+              echo "AWS CLI installation verification failed"
+              exit 1
+            }
           fi
 
       - name: Configure AWS Credentials (OIDC)
