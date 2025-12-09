@@ -122,9 +122,19 @@ jobs:
           # Trim whitespace and set AWS credentials as environment variables for subsequent steps
           ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
           SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
+          SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
           
           echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
           echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
+          
+          # AWS SSO and temporary credentials require AWS_SESSION_TOKEN
+          if [ -n "${{ secrets.AWS_SESSION_TOKEN }}" ] && [ -n "${SESSION_TOKEN}" ]; then
+            echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
+            echo "✅ AWS SSO/temporary credentials detected (with session token)"
+          else
+            echo "ℹ️  No AWS_SESSION_TOKEN provided - using long-term credentials"
+          fi
+          
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           
@@ -148,9 +158,10 @@ jobs:
           echo ""
           echo "If you see 'InvalidClientTokenId' errors, please verify:"
           echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
-          echo "2. Credentials are active and not expired"
-          echo "3. IAM user has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
-          echo "4. No extra whitespace or newlines in the secret values"
+          echo "2. For AWS SSO: AWS_SESSION_TOKEN secret is also set (required for SSO credentials)"
+          echo "3. Credentials are active and not expired (SSO tokens expire after ~1 hour)"
+          echo "4. IAM user/role has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
+          echo "5. No extra whitespace or newlines in the secret values"
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
@@ -224,9 +235,19 @@ jobs:
           # Trim whitespace and set AWS credentials as environment variables for subsequent steps
           ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
           SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
+          SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
           
           echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
           echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
+          
+          # AWS SSO and temporary credentials require AWS_SESSION_TOKEN
+          if [ -n "${{ secrets.AWS_SESSION_TOKEN }}" ] && [ -n "${SESSION_TOKEN}" ]; then
+            echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
+            echo "✅ AWS SSO/temporary credentials detected (with session token)"
+          else
+            echo "ℹ️  No AWS_SESSION_TOKEN provided - using long-term credentials"
+          fi
+          
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           
@@ -250,9 +271,10 @@ jobs:
           echo ""
           echo "If you see 'InvalidClientTokenId' errors, please verify:"
           echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
-          echo "2. Credentials are active and not expired"
-          echo "3. IAM user has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
-          echo "4. No extra whitespace or newlines in the secret values"
+          echo "2. For AWS SSO: AWS_SESSION_TOKEN secret is also set (required for SSO credentials)"
+          echo "3. Credentials are active and not expired (SSO tokens expire after ~1 hour)"
+          echo "4. IAM user/role has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
+          echo "5. No extra whitespace or newlines in the secret values"
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
