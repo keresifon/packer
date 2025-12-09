@@ -46,11 +46,32 @@ jobs:
         with:
           version: "1.10.0"
 
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Request OIDC token from GitHub Actions
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
+          
+          # Assume AWS role using OIDC token
+          AWS_CREDS=$(aws sts assume-role-with-web-identity \
+            --role-arn ${{ secrets.AWS_ROLE_ARN }} \
+            --role-session-name github-actions-packer-validate \
+            --web-identity-token "$OIDC_TOKEN" \
+            --duration-seconds 3600 \
+            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+            --output text)
+          
+          # Set AWS credentials as environment variables for subsequent steps
+          echo "AWS_ACCESS_KEY_ID=$(echo $AWS_CREDS | awk '{print $1}')" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=$(echo $AWS_CREDS | awk '{print $2}')" >> $GITHUB_ENV
+          echo "AWS_SESSION_TOKEN=$(echo $AWS_CREDS | awk '{print $3}')" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          
+          # Verify AWS credentials
+          aws sts get-caller-identity
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
@@ -75,11 +96,32 @@ jobs:
         with:
           version: "1.10.0"
 
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Request OIDC token from GitHub Actions
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
+          
+          # Assume AWS role using OIDC token
+          AWS_CREDS=$(aws sts assume-role-with-web-identity \
+            --role-arn ${{ secrets.AWS_ROLE_ARN }} \
+            --role-session-name github-actions-packer-build \
+            --web-identity-token "$OIDC_TOKEN" \
+            --duration-seconds 3600 \
+            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+            --output text)
+          
+          # Set AWS credentials as environment variables for subsequent steps
+          echo "AWS_ACCESS_KEY_ID=$(echo $AWS_CREDS | awk '{print $1}')" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=$(echo $AWS_CREDS | awk '{print $2}')" >> $GITHUB_ENV
+          echo "AWS_SESSION_TOKEN=$(echo $AWS_CREDS | awk '{print $3}')" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          
+          # Verify AWS credentials
+          aws sts get-caller-identity
 
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
