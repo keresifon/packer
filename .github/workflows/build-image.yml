@@ -33,7 +33,7 @@ env:
 jobs:
   validate:
     name: Validate Packer Template
-    runs-on: ubuntu-latest
+    runs-on: terraform
     permissions:
       id-token: write  # Required for OIDC
       contents: read
@@ -46,6 +46,10 @@ jobs:
           echo "=== Runner OS Information ==="
           uname -a
           cat /etc/os-release
+          echo ""
+          echo "=== Package Manager ==="
+          which dnf && dnf --version || echo "dnf not found"
+          which yum && yum --version || echo "yum not found"
           echo ""
           echo "=== Available Shells ==="
           cat /etc/shells
@@ -65,7 +69,7 @@ jobs:
           echo $PATH
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y jq unzip curl
+        run: sudo dnf install -y jq unzip curl
 
       - name: Setup Packer
         run: |
@@ -110,7 +114,7 @@ jobs:
   build:
     name: Build AMI
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: terraform
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     permissions:
       id-token: write  # Required for OIDC
@@ -120,7 +124,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y jq unzip curl
+        run: sudo dnf install -y jq unzip curl
 
       - name: Setup Packer
         run: |
