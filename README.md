@@ -143,102 +143,47 @@ git clone https://github.com/your-username/packer.git
 cd packer
 ```
 
-### Step 2: Configure AWS OIDC Identity Provider
+### Step 2: Configure AWS OIDC Authentication
 
-OIDC (OpenID Connect) allows GitHub Actions to authenticate with AWS without storing access keys. This is more secure than using access keys.
+This project uses AWS OIDC (OpenID Connect) for secure authentication between GitHub Actions and AWS. This eliminates the need to store AWS access keys as secrets.
 
-#### 2.1 Create OIDC Identity Provider in AWS
+**📖 For detailed step-by-step instructions, see [AWS OIDC Setup Guide](docs/AWS-OIDC-SETUP.md)**
 
-1. Log into AWS Console
-2. Navigate to **IAM** → **Identity providers**
-3. Click **Add provider**
-4. Select **OpenID Connect**
-5. Configure:
-   - **Provider URL**: `https://token.actions.githubusercontent.com`
-   - **Audience**: `sts.amazonaws.com`
-6. Click **Add provider**
+The guide includes:
+- Creating OIDC Identity Provider in AWS
+- Creating IAM Role with proper trust policy
+- Configuring all required IAM permissions
+- Setting up GitHub Secrets
+- Troubleshooting common issues
 
-#### 2.2 Create IAM Role for GitHub Actions
+**Quick Summary:**
+1. Create OIDC Identity Provider in AWS IAM (`https://token.actions.githubusercontent.com`)
+2. Create IAM Role with trust policy allowing your GitHub repository
+3. Attach permissions policy with required EC2 and SSM permissions (see [AWS-OIDC-SETUP.md](docs/AWS-OIDC-SETUP.md) for complete list)
+4. Add `AWS_ROLE_ARN` secret to GitHub repository
 
-1. Navigate to **IAM** → **Roles** → **Create role**
-2. Select **Web identity**
-3. Choose the identity provider you just created:
-   - **Identity provider**: `token.actions.githubusercontent.com`
-   - **Audience**: `sts.amazonaws.com`
-4. Click **Next**
-5. **Configure conditions** (optional but recommended):
-   ```json
-   {
-     "StringEquals": {
-       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-     },
-     "StringLike": {
-       "token.actions.githubusercontent.com:sub": "repo:YOUR_GITHUB_USERNAME/YOUR_REPO_NAME:*"
-     }
-   }
-   ```
-   Replace `YOUR_GITHUB_USERNAME` and `YOUR_REPO_NAME` with your actual values.
-6. Click **Next**
-7. **Attach policies** with these permissions:
-   - `AmazonEC2FullAccess` (or create a custom policy with least privilege)
-   
-   **Minimum required permissions:**
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [
-       {
-         "Effect": "Allow",
-         "Action": [
-           "ec2:DescribeImages",
-           "ec2:DescribeInstances",
-           "ec2:RunInstances",
-           "ec2:CreateImage",
-           "ec2:CreateTags",
-           "ec2:CreateSnapshot",
-           "ec2:DescribeSnapshots",
-           "ec2:DeleteSnapshot",
-           "ec2:TerminateInstances",
-           "ec2:DeregisterImage",
-           "ec2:DescribeRegions",
-           "ec2:DescribeAvailabilityZones",
-           "ec2:CreateSecurityGroup",
-           "ec2:DeleteSecurityGroup",
-           "ec2:AuthorizeSecurityGroupIngress",
-           "ec2:CreateKeyPair",
-           "ec2:DeleteKeyPair",
-           "ec2:DescribeKeyPairs"
-         ],
-         "Resource": "*"
-       }
-     ]
-   }
-   ```
-8. Click **Next**
-9. **Name the role**: e.g., `github-actions-packer`
-10. **Add description**: "IAM role for GitHub Actions to build Packer AMIs"
-11. Click **Create role**
-12. **Copy the Role ARN** - you'll need this for GitHub Secrets
-    - Format: `arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME`
+**Required IAM Permissions:**
+- EC2: Run instances, create images, manage snapshots, security groups, key pairs
+- SSM Parameter Store: Put/get parameters for AMI ID storage
+- See [AWS-OIDC-SETUP.md](docs/AWS-OIDC-SETUP.md#required-iam-permissions) for the complete permissions list
 
-### Step 3: Configure GitHub Secrets
+### Step 3: Configure Build Settings (Optional)
 
-GitHub Secrets store sensitive information that the workflow needs to authenticate with AWS.
+Edit `config/build-config.yml` to customize:
+- Default AWS region and Ubuntu version
+- Instance types for build and validation
+- CIS compliance thresholds
+- Target regions for AMI distribution
+- Parameter Store settings
 
-1. Go to your GitHub repository
-2. Navigate to **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret** for the following:
-
-#### AWS Secrets
-
-- **Name**: `AWS_ROLE_ARN`
-- **Value**: The ARN of the IAM role you created (e.g., `arn:aws:iam::123456789012:role/github-actions-packer`)
+See [Configuration Guide](config/README.md) for details.
 
 ### Step 4: Verify Setup
 
 1. **Check GitHub Secrets**: Ensure `AWS_ROLE_ARN` secret is configured
 2. **Check AWS Role**: Verify the IAM role exists and has correct permissions
 3. **Verify Workflow File**: Ensure `.github/workflows/build-image.yml` exists
+4. **Test Build**: Run a manual workflow dispatch to verify everything works
 
 ## Usage
 
