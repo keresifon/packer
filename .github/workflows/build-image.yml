@@ -318,11 +318,21 @@ jobs:
               
               # Extract failed checks if available
               if grep -q "Failed checks:" packer-build.log; then
-                FAILED_CHECKS=$(grep -A 1 "Failed checks:" packer-build.log | tail -1 | sed 's/.*: //' || echo "")
-                if [ -n "$FAILED_CHECKS" ] && [ "$FAILED_CHECKS" != "" ]; then
+                # Extract failed checks from Ansible debug output
+                # Handle both formats: "Failed checks: ..." and JSON format with "msg": "Failed checks: ..."
+                FAILED_CHECKS=$(grep -o '"Failed checks:[^"]*"' packer-build.log | sed 's/"Failed checks: *//;s/"$//' | head -1)
+                if [ -z "$FAILED_CHECKS" ]; then
+                  # Fallback: try extracting from plain text format
+                  FAILED_CHECKS=$(grep "Failed checks:" packer-build.log | grep -v "^[[:space:]]*}" | sed -n 's/.*Failed checks:[[:space:]]*\([^}]*\).*/\1/p' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -1)
+                fi
+                # Clean up: remove JSON artifacts and validate content
+                FAILED_CHECKS=$(echo "$FAILED_CHECKS" | sed 's/[{}"]//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                # Only show failed checks section if there are actual failed checks (contains alphanumeric characters)
+                if [ -n "$FAILED_CHECKS" ] && echo "$FAILED_CHECKS" | grep -q '[A-Za-z0-9]'; then
                   echo "### ❌ Failed Checks" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "$FAILED_CHECKS" | sed 's/, /\n- /g' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+                  # Convert comma-separated list to markdown list
+                  echo "$FAILED_CHECKS" | sed 's/, */\n/g' | sed 's/^[[:space:]]*//' | sed '/^$/d' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
                 fi
               fi
@@ -634,11 +644,21 @@ jobs:
               
               # Extract failed checks if available
               if grep -q "Failed checks:" validation-output.log; then
-                FAILED_CHECKS=$(grep -A 1 "Failed checks:" validation-output.log | tail -1 | sed 's/.*: //' || echo "")
-                if [ -n "$FAILED_CHECKS" ] && [ "$FAILED_CHECKS" != "" ]; then
+                # Extract failed checks from Ansible debug output
+                # Handle both formats: "Failed checks: ..." and JSON format with "msg": "Failed checks: ..."
+                FAILED_CHECKS=$(grep -o '"Failed checks:[^"]*"' validation-output.log | sed 's/"Failed checks: *//;s/"$//' | head -1)
+                if [ -z "$FAILED_CHECKS" ]; then
+                  # Fallback: try extracting from plain text format
+                  FAILED_CHECKS=$(grep "Failed checks:" validation-output.log | grep -v "^[[:space:]]*}" | sed -n 's/.*Failed checks:[[:space:]]*\([^}]*\).*/\1/p' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -1)
+                fi
+                # Clean up: remove JSON artifacts and validate content
+                FAILED_CHECKS=$(echo "$FAILED_CHECKS" | sed 's/[{}"]//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                # Only show failed checks section if there are actual failed checks (contains alphanumeric characters)
+                if [ -n "$FAILED_CHECKS" ] && echo "$FAILED_CHECKS" | grep -q '[A-Za-z0-9]'; then
                   echo "### ❌ Failed Checks" >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "$FAILED_CHECKS" | sed 's/, /\n- /g' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+                  # Convert comma-separated list to markdown list
+                  echo "$FAILED_CHECKS" | sed 's/, */\n/g' | sed 's/^[[:space:]]*//' | sed '/^$/d' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
                   echo "" >> $GITHUB_STEP_SUMMARY
                 fi
               fi
