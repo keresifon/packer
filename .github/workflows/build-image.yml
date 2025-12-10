@@ -1,447 +1,795 @@
 name: Build Ubuntu Golden Image
 
 on:
+
   workflow_dispatch:
+
     inputs:
+
       ubuntu_version:
+
         description: 'Ubuntu version to build'
+
         required: false
+
         default: '22.04'
+
         type: choice
+
         options:
+
           - '22.04'
+
           - '20.04'
+
       aws_region:
+
         description: 'AWS region'
+
         required: false
+
         default: 'ca-central-1'
+
         type: string
+
   push:
+
     branches:
+
       - main
+
     paths:
+
       - '*.pkr.hcl'
+
       - '.github/workflows/**'
+
   pull_request:
+
     branches:
+
       - main
 
 env:
+
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'ca-central-1' }}
+
   PKR_VAR_ubuntu_version: ${{ github.event.inputs.ubuntu_version || '22.04' }}
+
   PKR_VAR_vpc_id: ${{ vars.VPC_ID || '' }}
+
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
 
 jobs:
+
   validate:
+
     name: Validate Packer Template
+
     runs-on: terraform
+
     permissions:
+
       contents: read
+
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Inspect Runner Environment
+
         run: |
+
           echo "=== Runner OS Information ==="
+
           uname -a
+
           cat /etc/os-release
+
           echo ""
-          echo "=== Package Manager ==="
+
+          echo "=== Package Manager. ==="
+
           which dnf && dnf --version || echo "dnf not found"
+
           which yum && yum --version || echo "yum not found"
+
           echo ""
+
           echo "=== Available Shells ==="
+
           cat /etc/shells
+
           echo ""
+
           echo "=== Pre-installed Tools ==="
+
           echo "curl: $(which curl || echo 'not found')"
+
           echo "wget: $(which wget || echo 'not found')"
+
           echo "unzip: $(which unzip || echo 'not found')"
+
           echo "jq: $(which jq || echo 'not found')"
+
           echo "aws: $(which aws || echo 'not found')"
+
           echo "git: $(which git || echo 'not found')"
+
           echo ""
+
           echo "=== Environment Variables ==="
+
           env | grep -E '^(PATH|HOME|USER|SHELL|RUNNER)' | sort
+
           echo ""
+
           echo "=== PATH ==="
+
           echo $PATH
 
       - name: Install dependencies
+
         run: |
+
           # Check if packages are already installed
+
           if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+
             echo "All required packages (jq, unzip, curl) are already installed"
+
             jq --version
+
             unzip -v | head -1
+
             curl --version | head -1
+
           else
+
             echo "Some packages missing, attempting installation..."
+
             # Try to install missing packages, but don't fail if dnf has issues
-             dnf install -y jq unzip curl 2>&1 || {
+
+            dnf install -y jq unzip curl 2>&1 || {
+
               echo "dnf install encountered issues, checking what's available..."
+
               # Install jq manually if needed and dnf failed
+
               if ! command -v jq >/dev/null 2>&1; then
+
                 echo "Installing jq from GitHub releases..."
+
                 curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
+
                 chmod +x /tmp/jq
-                 mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+
+                mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+
               fi
+
             }
+
             # Verify what we have
+
             echo "Final status:"
+
             command -v jq && jq --version || echo "jq: not available"
+
             command -v unzip && unzip -v | head -1 || echo "unzip: not available"
+
             command -v curl && curl --version | head -1 || echo "curl: not available"
+
           fi
+
+ 
 
       - name: Setup Packer
+
         run: |
+
           PACKER_VERSION="1.10.0"
+
           # Download and install Packer
+
           curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
+
           unzip -q packer.zip
-           mv packer /usr/local/bin/
+
+          mv packer /usr/local/bin/
+
           rm packer.zip
+
           packer version
 
+ 
+
       - name: Configure AWS Credentials
+
         run: |
+
           # Verify secrets are configured (before setting to GITHUB_ENV)
+
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+
             echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured in GitHub Secrets."
+
             echo "Please go to Settings > Secrets and variables > Actions and add AWS_ACCESS_KEY_ID"
+
             exit 1
+
           fi
+
           if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+
             echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured in GitHub Secrets."
+
             echo "Please go to Settings > Secrets and variables > Actions and add AWS_SECRET_ACCESS_KEY"
+
             exit 1
+
           fi
-          
+
           # Trim whitespace and set AWS credentials as environment variables for subsequent steps
+
           ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
+
           SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
+
           SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
-          
+
           echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
+
           echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
-          
+
           # AWS SSO and temporary credentials require AWS_SESSION_TOKEN
+
           if [ -n "${{ secrets.AWS_SESSION_TOKEN }}" ] && [ -n "${SESSION_TOKEN}" ]; then
+
             echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
+
             echo "✅ AWS SSO/temporary credentials detected (with session token)"
+
           else
+
             echo "ℹ️  No AWS_SESSION_TOKEN provided - using long-term credentials"
+
           fi
-          
+
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-          
+
           # Basic format validation (without exposing values)
+
           ACCESS_KEY_LEN=${#ACCESS_KEY}
+
           SECRET_KEY_LEN=${#SECRET_KEY}
-          
+
           if [ $ACCESS_KEY_LEN -lt 16 ] || [ $ACCESS_KEY_LEN -gt 128 ]; then
+
             echo "WARNING: AWS_ACCESS_KEY_ID length is ${ACCESS_KEY_LEN} characters (expected 16-128)"
+
             echo "This may indicate an invalid or incorrectly formatted access key"
+
           fi
-          
+
           if [ $SECRET_KEY_LEN -lt 40 ]; then
+
             echo "WARNING: AWS_SECRET_ACCESS_KEY length is ${SECRET_KEY_LEN} characters (expected 40+)"
+
             echo "This may indicate an invalid or incorrectly formatted secret key"
+
           fi
-          
+
           echo "✅ AWS credentials configured successfully"
+
           echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
+
           echo "Note: Credentials will be validated by Packer during execution"
+
           echo ""
+
           echo "If you see 'InvalidClientTokenId' errors, please verify:"
+
           echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
+
           echo "2. For AWS SSO: AWS_SESSION_TOKEN secret is also set (required for SSO credentials)"
+
           echo "3. Credentials are active and not expired (SSO tokens expire after ~1 hour)"
+
           echo "4. IAM user/role has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
+
           echo "5. No extra whitespace or newlines in the secret values"
 
       - name: Initialize Packer
+
         run: packer init ubuntu-golden-image.pkr.hcl
 
       - name: Install AWS CLI (if needed)
+
         run: |
+
           if command -v aws >/dev/null 2>&1; then
+
             echo "AWS CLI is already installed"
+
             aws --version
+
           else
+
             echo "Installing AWS CLI..."
+
             curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+
             unzip -q awscliv2.zip
+
             ./aws/install
+
             rm -rf aws awscliv2.zip
+
             aws --version
+
           fi
 
       - name: Validate AWS Credentials
+
         run: |
+
           echo "=== Validating AWS Credentials ==="
-          
+
           # Test AWS credentials by calling STS GetCallerIdentity
+
           # This is the same call Packer makes when validating credentials
+
           if aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}" > /dev/null 2>&1; then
+
             echo "✅ AWS credentials are valid"
+
             aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}"
+
           else
+
             echo "❌ ERROR: AWS credentials validation failed"
+
             echo ""
+
             echo "This error occurs when Packer tries to query AWS (e.g., for AMI data sources)."
+
             echo ""
+
             echo "Troubleshooting steps:"
+
             echo "1. Verify AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are correct"
+
             echo "2. If using AWS SSO, ensure AWS_SESSION_TOKEN secret is set and not expired"
+
             echo "3. Check that credentials have required IAM permissions (sts:GetCallerIdentity, ec2:DescribeImages, etc.)"
+
             echo "4. Verify no extra whitespace or newlines in secret values"
+
             echo "5. Ensure credentials are active and not revoked"
+
             echo ""
+
             echo "Testing with verbose output:"
+
             aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}" || true
+
             exit 1
+
           fi
-          
+
           echo ""
+
           echo "=== Testing EC2 Permissions ==="
+
           # Test if we can describe images (required for Packer data source)
+
           if aws ec2 describe-images --owners 099720109477 --region "${{ env.PKR_VAR_aws_region }}" --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" --query 'Images[0].ImageId' --output text > /dev/null 2>&1; then
+
             echo "✅ Can query EC2 images (required for Packer AMI data source)"
+
           else
+
             echo "⚠️  WARNING: Cannot query EC2 images. This may cause Packer build to fail."
+
             echo "Required permission: ec2:DescribeImages"
+
           fi
 
       - name: Validate Packer template
+
         run: packer validate ubuntu-golden-image.pkr.hcl
 
   build:
+
     name: Build AMI
+
     needs: validate
+
     runs-on: terraform
+
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
     permissions:
+
       contents: read
+
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Install dependencies
+
         run: |
+
           # Check if packages are already installed
+
           if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+
             echo "All required packages (jq, unzip, curl) are already installed"
+
             jq --version
+
             unzip -v | head -1
+
             curl --version | head -1
+
           else
+
             echo "Some packages missing, attempting installation..."
+
             # Try to install missing packages, but don't fail if dnf has issues
-             dnf install -y jq unzip curl 2>&1 || {
+
+            dnf install -y jq unzip curl 2>&1 || {
+
               echo "dnf install encountered issues, checking what's available..."
+
               # Install jq manually if needed and dnf failed
+
               if ! command -v jq >/dev/null 2>&1; then
+
                 echo "Installing jq from GitHub releases..."
+
                 curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
+
                 chmod +x /tmp/jq
-                 mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+
+                mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+
               fi
+
             }
+
             # Verify what we have
+
             echo "Final status:"
+
             command -v jq && jq --version || echo "jq: not available"
+
             command -v unzip && unzip -v | head -1 || echo "unzip: not available"
+
             command -v curl && curl --version | head -1 || echo "curl: not available"
+
           fi
+
+ 
 
       - name: Setup Packer
+
         run: |
+
           PACKER_VERSION="1.10.0"
+
           # Download and install Packer
+
           curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
+
           unzip -q packer.zip
-           mv packer /usr/local/bin/
+
+          mv packer /usr/local/bin/
+
           rm packer.zip
+
           packer version
 
+ 
+
       - name: Configure AWS Credentials
+
         run: |
+
           # Verify secrets are configured (before setting to GITHUB_ENV)
+
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+
             echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured in GitHub Secrets."
+
             echo "Please go to Settings > Secrets and variables > Actions and add AWS_ACCESS_KEY_ID"
+
             exit 1
+
           fi
+
           if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+
             echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured in GitHub Secrets."
+
             echo "Please go to Settings > Secrets and variables > Actions and add AWS_SECRET_ACCESS_KEY"
+
             exit 1
+
           fi
-          
+
           # Trim whitespace and set AWS credentials as environment variables for subsequent steps
+
           ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
+
           SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
+
           SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
-          
+
           echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
+
           echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
-          
+
           # AWS SSO and temporary credentials require AWS_SESSION_TOKEN
+
           if [ -n "${{ secrets.AWS_SESSION_TOKEN }}" ] && [ -n "${SESSION_TOKEN}" ]; then
+
             echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
+
             echo "✅ AWS SSO/temporary credentials detected (with session token)"
+
           else
+
             echo "ℹ️  No AWS_SESSION_TOKEN provided - using long-term credentials"
+
           fi
-          
+
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-          
+
           # Basic format validation (without exposing values)
+
           ACCESS_KEY_LEN=${#ACCESS_KEY}
+
           SECRET_KEY_LEN=${#SECRET_KEY}
-          
+
           if [ $ACCESS_KEY_LEN -lt 16 ] || [ $ACCESS_KEY_LEN -gt 128 ]; then
+
             echo "WARNING: AWS_ACCESS_KEY_ID length is ${ACCESS_KEY_LEN} characters (expected 16-128)"
+
             echo "This may indicate an invalid or incorrectly formatted access key"
+
           fi
-          
+
           if [ $SECRET_KEY_LEN -lt 40 ]; then
+
             echo "WARNING: AWS_SECRET_ACCESS_KEY length is ${SECRET_KEY_LEN} characters (expected 40+)"
+
             echo "This may indicate an invalid or incorrectly formatted secret key"
+
           fi
-          
+
           echo "✅ AWS credentials configured successfully"
+
           echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
+
           echo "Note: Credentials will be validated by Packer during execution"
+
           echo ""
+
           echo "If you see 'InvalidClientTokenId' errors, please verify:"
+
           echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
+
           echo "2. For AWS SSO: AWS_SESSION_TOKEN secret is also set (required for SSO credentials)"
+
           echo "3. Credentials are active and not expired (SSO tokens expire after ~1 hour)"
+
           echo "4. IAM user/role has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
+
           echo "5. No extra whitespace or newlines in the secret values"
 
       - name: Initialize Packer
+
         run: packer init ubuntu-golden-image.pkr.hcl
 
       - name: Install AWS CLI (if needed)
+
         run: |
+
           if command -v aws >/dev/null 2>&1; then
+
             echo "AWS CLI is already installed"
+
             aws --version
+
           else
+
             echo "Installing AWS CLI..."
+
             curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+
             unzip -q awscliv2.zip
+
             ./aws/install
+
             rm -rf aws awscliv2.zip
+
             aws --version
+
           fi
 
       - name: Validate AWS Credentials
+
         run: |
+
           echo "=== Validating AWS Credentials ==="
-          
+
           # Test AWS credentials by calling STS GetCallerIdentity
+
           # This is the same call Packer makes when validating credentials
+
           if aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}" > /dev/null 2>&1; then
+
             echo "✅ AWS credentials are valid"
+
             aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}"
+
           else
+
             echo "❌ ERROR: AWS credentials validation failed"
+
             echo ""
+
             echo "This error occurs when Packer tries to query AWS (e.g., for AMI data sources)."
+
             echo "The same credentials are used in both validate and build jobs."
+
             echo ""
+
             echo "Troubleshooting steps:"
+
             echo "1. Verify AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are correct"
+
             echo "2. If using AWS SSO, ensure AWS_SESSION_TOKEN secret is set and not expired"
+
             echo "3. Check that credentials have required IAM permissions (sts:GetCallerIdentity, ec2:DescribeImages, etc.)"
+
             echo "4. Verify no extra whitespace or newlines in secret values"
+
             echo "5. Ensure credentials are active and not revoked"
+
             echo ""
+
             echo "Testing with verbose output:"
+
             aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}" || true
+
             exit 1
-          fi
-          
-          echo ""
-          echo "=== Testing EC2 Permissions ==="
-          # Test if we can describe images (required for Packer data source)
-          if aws ec2 describe-images --owners 099720109477 --region "${{ env.PKR_VAR_aws_region }}" --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" --query 'Images[0].ImageId' --output text > /dev/null 2>&1; then
-            echo "✅ Can query EC2 images (required for Packer AMI data source)"
-          else
-            echo "⚠️  WARNING: Cannot query EC2 images. This may cause Packer build to fail."
-            echo "Required permission: ec2:DescribeImages"
+
           fi
 
-      - name: Validate VPC and Subnet Configuration
-        run: |
-          VPC_ID="${{ env.PKR_VAR_vpc_id }}"
-          SUBNET_ID="${{ env.PKR_VAR_subnet_id }}"
-          REGION="${{ env.PKR_VAR_aws_region }}"
-          
-          echo "=== VPC and Subnet Configuration ==="
-          echo "Region: ${REGION}"
-          echo "VPC ID: ${VPC_ID:-'Not specified (will use default VPC if available)'}"
-          echo "Subnet ID: ${SUBNET_ID:-'Not specified (will use default subnet if available)'}"
           echo ""
-          
-          # Validation: If subnet is specified, VPC must also be specified
-          if [ -n "$SUBNET_ID" ] && [ -z "$VPC_ID" ]; then
-            echo "❌ ERROR: Subnet ID is specified but VPC ID is not."
-            echo "Packer requires both VPC ID and Subnet ID to be specified together."
-            echo "The subnet must belong to the specified VPC."
-            echo ""
-            echo "Solution: Set VPC_ID repository variable, or remove SUBNET_ID to use default VPC/subnet."
-            exit 1
+
+          echo "=== Testing EC2 Permissions ==="
+
+          # Test if we can describe images (required for Packer data source)
+
+          if aws ec2 describe-images --owners 099720109477 --region "${{ env.PKR_VAR_aws_region }}" --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" --query 'Images[0].ImageId' --output text > /dev/null 2>&1; then
+
+            echo "✅ Can query EC2 images (required for Packer AMI data source)"
+
+          else
+
+            echo "⚠️  WARNING: Cannot query EC2 images. This may cause Packer build to fail."
+
+            echo "Required permission: ec2:DescribeImages"
+
           fi
-          
+
+ 
+
+      - name: Validate VPC and Subnet Configuration
+
+        run: |
+
+          VPC_ID="${{ env.PKR_VAR_vpc_id }}"
+
+          SUBNET_ID="${{ env.PKR_VAR_subnet_id }}"
+
+          REGION="${{ env.PKR_VAR_aws_region }}"
+
+          echo "=== VPC and Subnet Configuration ==="
+
+          echo "Region: ${REGION}"
+
+          echo "VPC ID: ${VPC_ID:-'Not specified (will use default VPC if available)'}"
+
+          echo "Subnet ID: ${SUBNET_ID:-'Not specified (will use default subnet if available)'}"
+
+          echo ""
+
+          # Validation: If subnet is specified, VPC must also be specified
+
+          if [ -n "$SUBNET_ID" ] && [ -z "$VPC_ID" ]; then
+
+            echo "❌ ERROR: Subnet ID is specified but VPC ID is not."
+
+            echo "Packer requires both VPC ID and Subnet ID to be specified together."
+
+            echo "The subnet must belong to the specified VPC."
+
+            echo ""
+
+            echo "Solution: Set VPC_ID repository variable, or remove SUBNET_ID to use default VPC/subnet."
+
+            exit 1
+
+          fi
+
           if [ -n "$VPC_ID" ] && [ -n "$SUBNET_ID" ]; then
+
             echo "✅ Both VPC and Subnet IDs are configured"
+
             echo "⚠️  Important: Ensure the subnet '$SUBNET_ID' exists in VPC '$VPC_ID' in region '$REGION'"
+
             echo ""
-            echo "If you get 'InvalidSubnetID.NotFound' errors, check:"
-            echo "  1. The subnet exists in region '$REGION' (not a different region)"
-            echo "  2. The subnet belongs to VPC '$VPC_ID'"
-            echo "  3. The subnet ID is correct (no typos)"
-            echo ""
-            echo "To find available subnets in your VPC for region '$REGION', run locally:"
-            echo "  aws ec2 describe-subnets --filters \"Name=vpc-id,Values=$VPC_ID\" --region $REGION --query 'Subnets[*].[SubnetId,AvailabilityZone,CidrBlock]' --output table"
-            echo ""
-            echo "Then update the SUBNET_ID repository variable with a valid subnet ID from the list above."
+
+            echo "To verify, run:"
+
+            echo "  aws ec2 describe-subnets --subnet-ids $SUBNET_ID --region $REGION --query 'Subnets[0].VpcId'"
+
+            echo "  (Should return: $VPC_ID)"
+
           fi
 
       - name: Build Packer image
+
         run: |
+
           PACKER_BUILD_CMD="packer build \
+
             -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\" \
+
             -var=\"ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}\""
-          
+
           # Add VPC and subnet variables if provided
+
           # Note: If subnet_id is provided, vpc_id should also be provided
+
           if [ -n "${{ env.PKR_VAR_vpc_id }}" ]; then
+
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"vpc_id=${{ env.PKR_VAR_vpc_id }}\""
+
             echo "Using VPC ID: ${{ env.PKR_VAR_vpc_id }}"
+
           fi
+
           if [ -n "${{ env.PKR_VAR_subnet_id }}" ]; then
+
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"subnet_id=${{ env.PKR_VAR_subnet_id }}\""
+
             echo "Using Subnet ID: ${{ env.PKR_VAR_subnet_id }}"
+
           fi
-          
+
           PACKER_BUILD_CMD="${PACKER_BUILD_CMD} ubuntu-golden-image.pkr.hcl"
+
           eval $PACKER_BUILD_CMD
 
       - name: Output AMI ID
-        if: success()
-        run: |
-          echo "AMI build completed successfully!"
-          echo "Check AWS EC2 Console for the latest AMI"
 
+        if: success()
+
+        run: |
+
+          echo "AMI build completed successfully!"
+
+          echo "Check AWS EC2 Console for the latest AMI"
