@@ -14,8 +14,6 @@ packer {
 
 }
 
- 
-
 # Variables - AWS Configuration
 
 # Note: AWS credentials are provided via environment/role (OIDC in GitHub Actions)
@@ -32,21 +30,7 @@ variable "aws_region" {
 
 }
 
- 
-
 # Variables - Image Configuration
-
-variable "ubuntu_version" {
-
-  type        = string
-
-  description = "Ubuntu version to use"
-
-  default     = "22.04"
-
-}
-
- 
 
 variable "instance_type" {
 
@@ -58,31 +42,25 @@ variable "instance_type" {
 
 }
 
- 
-
 variable "image_name" {
 
   type        = string
 
   description = "Name for the AMI"
 
-  default     = "ubuntu-golden-image"
+  default     = "amazonlinux2023-golden-image"
 
 }
 
- 
-
-variable "ssh_username" {
+variable "iam_instance_profile" {
 
   type        = string
 
-  description = "SSH username for the instance"
+  description = "IAM instance profile name for SSM access (optional - Packer can create temporary one)"
 
-  default     = "ubuntu"
+  default     = ""
 
 }
-
- 
 
 variable "vpc_id" {
 
@@ -94,8 +72,6 @@ variable "vpc_id" {
 
 }
 
- 
-
 variable "subnet_id" {
 
   type        = string
@@ -106,15 +82,13 @@ variable "subnet_id" {
 
 }
 
- 
+# Data source for latest Amazon Linux 2023 AMI
 
-# Data source for latest Ubuntu AMI
-
-data "amazon-ami" "ubuntu" {
+data "amazon-ami" "amazonlinux2023" {
 
   filters = {
 
-    name                = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
+    name                = "al2023-ami-*-x86_64"
 
     root-device-type    = "ebs"
 
@@ -124,19 +98,17 @@ data "amazon-ami" "ubuntu" {
 
   most_recent = true
 
-  owners      = ["099720109477"] # Canonical
+  owners      = ["amazon"] # AWS
 
   region      = var.aws_region
 
 }
 
- 
-
 # Build source
 
 # AWS credentials come from environment (AWS CLI, environment variables, or IAM role)
 
-source "amazon-ebs" "ubuntu" {
+source "amazon-ebs" "amazonlinux2023" {
 
   ami_name      = "${var.image_name}-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
 
@@ -144,11 +116,47 @@ source "amazon-ebs" "ubuntu" {
 
   region        = var.aws_region
 
-  source_ami    = data.amazon-ami.ubuntu.id
+  source_ami    = data.amazon-ami.amazonlinux2023.id
 
-  ssh_username  = var.ssh_username
+  # Use SSM Session Manager instead of SSH for instance access
 
- 
+  # SSM works with private IPs, no need for public IP or SSH security groups
+
+  # Benefits: No SSH keys, no security group rules, works with private subnets
+
+  communicator = "ssm"
+
+  # SSM configuration
+
+  # Packer will automatically create a temporary IAM instance profile if not provided
+
+  # The instance profile needs: AmazonSSMManagedInstanceCore policy
+
+  # Required IAM permissions for Packer to create temporary instance profile:
+
+  # - iam:CreateInstanceProfile
+
+  # - iam:AddRoleToInstanceProfile
+
+  # - iam:RemoveRoleFromInstanceProfile
+
+  # - iam:DeleteInstanceProfile
+
+  # - iam:PassRole (for the SSM role)
+
+  # - iam:CreateRole
+
+  # - iam:AttachRolePolicy
+
+  # - iam:DetachRolePolicy
+
+  # - iam:DeleteRole
+
+  iam_instance_profile = var.iam_instance_profile != "" ? var.iam_instance_profile : null
+
+  # SSM timeout settings
+
+  ssm_timeout = "15m"  # Timeout for SSM session establishment
 
   # VPC configuration (optional - only set if provided)
 
@@ -156,51 +164,21 @@ source "amazon-ebs" "ubuntu" {
 
   # The subnet must exist in the specified VPC and region
 
+  # SSM works with private IPs, so public IP is not required
+
   vpc_id    = var.vpc_id != "" ? var.vpc_id : null
 
   subnet_id = var.subnet_id != "" ? var.subnet_id : null
 
- 
-
-  # Ensure instance gets a public IP for internet access during provisioning
-
-  # Required for: package downloads, AWS CLI installation, SSH access from Packer
-
-  associate_public_ip_address = true
-
- 
-
-  # SSH configuration for connecting to the instance
-
-  # When using VPC, Packer needs explicit SSH settings
-
-  ssh_interface            = "public_ip"  # Use public IP instead of private IP
-
-  ssh_timeout              = "15m"         # Increase timeout to 15 minutes
-
-  ssh_handshake_attempts   = 50           # Retry SSH handshake up to 50 times
-
-  ssh_clear_authorized_keys = false       # Don't clear authorized keys (use default)
-
-  ssh_bastion_host         = null         # Not using bastion
-
-  ssh_bastion_port         = 22
-
-  ssh_bastion_username     = null
-
-  ssh_bastion_private_key_file = null
-
- 
-
   # Security group configuration
 
-  # Packer creates a temporary security group automatically with SSH access from 0.0.0.0/0
+  # Packer creates a temporary security group automatically
+
+  # With SSM, no inbound ports need to be opened (SSM uses outbound HTTPS)
 
   # If you have issues, you can pre-create a security group and specify it here:
 
   # security_group_ids = ["sg-xxxxxxxxx"]
-
- 
 
   # Tags for the AMI
 
@@ -208,9 +186,7 @@ source "amazon-ebs" "ubuntu" {
 
     Name        = var.image_name
 
-    OS          = "Ubuntu"
-
-    Version     = var.ubuntu_version
+    OS          = "AmazonLinux2023"
 
     ManagedBy   = "Packer"
 
@@ -218,29 +194,25 @@ source "amazon-ebs" "ubuntu" {
 
   }
 
- 
-
   # Tags for the snapshot
 
   snapshot_tags = {
 
     Name        = var.image_name
 
-    OS          = "Ubuntu"
-
-    Version     = var.ubuntu_version
+    OS          = "AmazonLinux2023"
 
     ManagedBy   = "Packer"
 
   }
 
- 
-
   # Launch block device mappings
+
+  # Amazon Linux 2023 uses /dev/xvda as the root device
 
   launch_block_device_mappings {
 
-    device_name           = "/dev/sda1"
+    device_name           = "/dev/xvda"
 
     volume_size           = 20
 
@@ -254,43 +226,35 @@ source "amazon-ebs" "ubuntu" {
 
 }
 
- 
-
 # Build configuration
 
 build {
 
-  name = "ubuntu-golden-image"
+  name = "amazonlinux2023-golden-image"
 
   sources = [
 
-    "source.amazon-ebs.ubuntu"
+    "source.amazon-ebs.amazonlinux2023"
 
   ]
 
- 
-
   # Provisioning: Update system
+
+  # Amazon Linux 2023 uses dnf package manager
 
   provisioner "shell" {
 
     inline = [
 
-      "sudo apt-get update",
+      "sudo dnf update -y",
 
-      "sudo apt-get upgrade -y",
+      "sudo dnf upgrade -y",
 
-      "sudo apt-get install -y software-properties-common",
-
-      "sudo apt-get autoremove -y",
-
-      "sudo apt-get autoclean -y"
+      "sudo dnf clean all"
 
     ]
 
   }
-
- 
 
   # Provisioning: Install common packages
 
@@ -298,13 +262,15 @@ build {
 
     inline = [
 
-      "sudo apt-get install -y curl wget git unzip",
+      "# Install common utilities",
 
-      "sudo apt-get install -y htop net-tools",
+      "sudo dnf install -y curl wget git unzip",
+
+      "sudo dnf install -y htop net-tools",
 
       "# Install AWS CLI v2 using official installer",
 
-      "curl \https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\ -o \"/tmp/awscliv2.zip\"",
+      "curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"/tmp/awscliv2.zip\"",
 
       "unzip -q /tmp/awscliv2.zip -d /tmp",
 
@@ -312,33 +278,33 @@ build {
 
       "rm -rf /tmp/aws /tmp/awscliv2.zip",
 
-      "# Install jq - handle dependency issues by installing libonig5 first or skip if unavailable",
+      "# Install jq",
 
-      "sudo apt-get install -y libonig5 || sudo apt-get install -y jq || echo 'Warning: jq installation skipped due to dependency issues'"
+      "sudo dnf install -y jq || echo 'Warning: jq installation skipped'"
 
     ]
 
   }
 
- 
+  # Provisioning: Ensure SSM Agent is running and enabled
 
-  # Provisioning: Configure SSH (optional - harden SSH)
+  # Amazon Linux 2023 comes with SSM Agent pre-installed, but ensure it's enabled
 
   provisioner "shell" {
 
     inline = [
 
-      "sudo sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config",
+      "# Ensure SSM Agent is enabled and running",
 
-      "sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config",
+      "sudo systemctl enable amazon-ssm-agent",
 
-      "sudo systemctl restart sshd || true"
+      "sudo systemctl start amazon-ssm-agent",
+
+      "sudo systemctl status amazon-ssm-agent || true"
 
     ]
 
   }
-
- 
 
   # Provisioning: Clean up
 
@@ -346,20 +312,28 @@ build {
 
     inline = [
 
+      "# Clean up cloud-init",
+
       "sudo cloud-init clean",
 
       "sudo rm -f /var/log/cloud-init*.log",
 
+      "# Clean up temporary files",
+
       "sudo rm -rf /tmp/*",
 
       "sudo rm -rf /var/tmp/*",
+
+      "# Clean up package cache",
+
+      "sudo dnf clean all",
+
+      "# Sync filesystem",
 
       "sudo sync"
 
     ]
 
   }
-
- 
 
 }
