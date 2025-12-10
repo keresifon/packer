@@ -118,13 +118,19 @@ source "amazon-ebs" "amazonlinux2023" {
 
   source_ami    = data.amazon-ami.amazonlinux2023.id
 
-  # Use SSM Session Manager instead of SSH for instance access
+  # Use SSM Session Manager for SSH access (instead of direct SSH)
 
   # SSM works with private IPs, no need for public IP or SSH security groups
 
   # Benefits: No SSH keys, no security group rules, works with private subnets
 
-  communicator = "ssm"
+  # Configure SSH to use Session Manager as the interface
+
+  communicator = "ssh"
+
+  ssh_username = "ec2-user"  # Default user for Amazon Linux 2023
+
+  ssh_interface = "session_manager"  # Use SSM Session Manager for SSH connection
 
   # SSM configuration
 
