@@ -56,9 +56,9 @@ variable "iam_instance_profile" {
 
   type        = string
 
-  description = "IAM instance profile name for SSM access (optional - Packer can create temporary one)"
+  description = "IAM instance profile name for SSM access (required for Session Manager - must have AmazonSSMManagedInstanceCore policy)"
 
-  default     = ""
+  # No default - must be provided
 
 }
 
@@ -164,21 +164,19 @@ source "amazon-ebs" "amazonlinux2023" {
 
   # The instance profile must have the AmazonSSMManagedInstanceCore policy attached
 
-  # Packer can create a temporary instance profile if you provide policy ARNs
+  # You must create an IAM instance profile with the AmazonSSMManagedInstanceCore policy
 
-  # Option 1: Use existing instance profile (recommended for production)
+  # Example AWS CLI command to create:
 
-  iam_instance_profile = var.iam_instance_profile != "" ? var.iam_instance_profile : null
+  # aws iam create-instance-profile --instance-profile-name packer-ssm-profile
 
-  # Option 2: Let Packer create temporary instance profile with managed policy
+  # aws iam create-role --role-name packer-ssm-role --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
 
-  # Reference the AmazonSSMManagedInstanceCore managed policy ARN
+  # aws iam attach-role-policy --role-name packer-ssm-role --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 
-  temporary_iam_instance_profile_policy_arns = var.iam_instance_profile == "" ? [
+  # aws iam add-role-to-instance-profile --instance-profile-name packer-ssm-profile --role-name packer-ssm-role
 
-    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-
-  ] : null
+  iam_instance_profile = var.iam_instance_profile
 
   # VPC configuration (optional - only set if provided)
 

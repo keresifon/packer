@@ -42,6 +42,8 @@ env:
 
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
 
+  PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || '' }}
+
 jobs:
 
   validate:
@@ -693,6 +695,38 @@ jobs:
           PACKER_BUILD_CMD="packer build \
 
             -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\""
+
+          # IAM instance profile is required for SSM Session Manager
+
+          if [ -z "${{ env.PKR_VAR_iam_instance_profile }}" ]; then
+
+            echo "❌ ERROR: IAM_INSTANCE_PROFILE repository variable is required for SSM Session Manager"
+
+            echo ""
+
+            echo "Please create an IAM instance profile with AmazonSSMManagedInstanceCore policy"
+
+            echo "and set it as the IAM_INSTANCE_PROFILE repository variable."
+
+            echo ""
+
+            echo "To create the instance profile, run:"
+
+            echo "  aws iam create-instance-profile --instance-profile-name packer-ssm-profile"
+
+            echo "  aws iam create-role --role-name packer-ssm-role --assume-role-policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}'"
+
+            echo "  aws iam attach-role-policy --role-name packer-ssm-role --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+
+            echo "  aws iam add-role-to-instance-profile --instance-profile-name packer-ssm-profile --role-name packer-ssm-role"
+
+            exit 1
+
+          fi
+
+          PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
+
+          echo "Using IAM Instance Profile: ${{ env.PKR_VAR_iam_instance_profile }}"
 
           # Add VPC and subnet variables if provided
 
