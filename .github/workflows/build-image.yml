@@ -168,6 +168,64 @@ jobs:
 
           fi
 
+      - name: Install AWS Session Manager Plugin
+
+        run: |
+
+          echo "=== Installing AWS Session Manager Plugin ==="
+
+          # Check if already installed
+
+          if command -v session-manager-plugin >/dev/null 2>&1; then
+
+            echo "Session Manager Plugin is already installed"
+
+            session-manager-plugin --version
+
+          else
+
+            echo "Installing Session Manager Plugin..."
+
+            # Download and install Session Manager Plugin for Linux
+
+            curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm" -o "/tmp/session-manager-plugin.rpm"
+
+            # Install using dnf or yum
+
+            if command -v dnf >/dev/null 2>&1; then
+
+              sudo dnf install -y /tmp/session-manager-plugin.rpm
+
+            elif command -v yum >/dev/null 2>&1; then
+
+              sudo yum install -y /tmp/session-manager-plugin.rpm
+
+            else
+
+              # Fallback: extract and install manually
+
+              echo "Package manager not found, installing manually..."
+
+              mkdir -p /tmp/session-manager-plugin
+
+              cd /tmp/session-manager-plugin
+
+              rpm2cpio /tmp/session-manager-plugin.rpm | cpio -idmv
+
+              sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/bin/
+
+              sudo chmod +x /usr/local/bin/session-manager-plugin
+
+            fi
+
+            # Verify installation
+
+            session-manager-plugin --version
+
+            echo "✅ Session Manager Plugin installed successfully"
+
+          fi
+
       - name: Setup Packer
 
         run: |
@@ -427,6 +485,64 @@ jobs:
             command -v unzip && unzip -v | head -1 || echo "unzip: not available"
 
             command -v curl && curl --version | head -1 || echo "curl: not available"
+
+          fi
+
+      - name: Install AWS Session Manager Plugin
+
+        run: |
+
+          echo "=== Installing AWS Session Manager Plugin ==="
+
+          # Check if already installed
+
+          if command -v session-manager-plugin >/dev/null 2>&1; then
+
+            echo "Session Manager Plugin is already installed"
+
+            session-manager-plugin --version
+
+          else
+
+            echo "Installing Session Manager Plugin..."
+
+            # Download and install Session Manager Plugin for Linux
+
+            curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm" -o "/tmp/session-manager-plugin.rpm"
+
+            # Install using dnf or yum
+
+            if command -v dnf >/dev/null 2>&1; then
+
+              sudo dnf install -y /tmp/session-manager-plugin.rpm
+
+            elif command -v yum >/dev/null 2>&1; then
+
+              sudo yum install -y /tmp/session-manager-plugin.rpm
+
+            else
+
+              # Fallback: extract and install manually
+
+              echo "Package manager not found, installing manually..."
+
+              mkdir -p /tmp/session-manager-plugin
+
+              cd /tmp/session-manager-plugin
+
+              rpm2cpio /tmp/session-manager-plugin.rpm | cpio -idmv
+
+              sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/bin/
+
+              sudo chmod +x /usr/local/bin/session-manager-plugin
+
+            fi
+
+            # Verify installation
+
+            session-manager-plugin --version
+
+            echo "✅ Session Manager Plugin installed successfully"
 
           fi
 
