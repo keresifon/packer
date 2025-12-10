@@ -90,11 +90,20 @@ source "amazon-ebs" "ubuntu" {
   ssh_timeout              = "15m"         # Increase timeout to 15 minutes
   ssh_handshake_attempts   = 50           # Retry SSH handshake up to 50 times
   ssh_clear_authorized_keys = false       # Don't clear authorized keys (use default)
+  ssh_bastion_host         = null         # Not using bastion
+  ssh_bastion_port         = 22
+  ssh_bastion_username     = null
+  ssh_bastion_private_key_file = null
   
   # Security group configuration
   # Packer creates a temporary security group, but we need to ensure it allows SSH
-  # If you have a custom security group, you can specify it here
-  # Otherwise, Packer will create one with SSH access from 0.0.0.0/0
+  # The temporary security group should allow SSH from 0.0.0.0/0
+  # If you have issues, you can pre-create a security group and specify it here:
+  # security_group_ids = ["sg-xxxxxxxxx"]
+  
+  # Temporary security group ingress rules (Packer will create these)
+  # These ensure SSH access from anywhere (required for GitHub Actions)
+  temporary_security_group_source_cidr = "0.0.0.0/0"
 
   # Tags for the AMI
   tags = {
