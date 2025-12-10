@@ -91,10 +91,6 @@ source "amazon-ebs" "ubuntu" {
   ssh_handshake_attempts   = 50           # Retry SSH handshake up to 50 times
   ssh_clear_authorized_keys = false       # Don't clear authorized keys (use default)
   
-  # Wait longer for instance to be ready before attempting SSH
-  # This gives the instance time to fully boot and start SSH service
-  wait_for_ready_timeout = "10m"          # Wait up to 10 minutes for instance to be ready
-  
   # Security group configuration
   # Packer creates a temporary security group, but we need to ensure it allows SSH
   # If you have a custom security group, you can specify it here
