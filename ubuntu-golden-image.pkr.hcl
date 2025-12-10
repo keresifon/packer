@@ -158,7 +158,47 @@ source "amazon-ebs" "amazonlinux2023" {
 
   # - iam:DeleteRole
 
+  # IAM instance profile configuration
+
+  # Option 1: Use existing instance profile (if provided)
+
   iam_instance_profile = var.iam_instance_profile != "" ? var.iam_instance_profile : null
+
+  # Option 2: Let Packer create temporary instance profile with required SSM permissions
+
+  # This policy document grants the instance permission to use SSM Session Manager
+
+  temporary_iam_instance_profile_policy_document = jsonencode({
+
+    Version = "2012-10-17"
+
+    Statement = [
+
+      {
+
+        Effect = "Allow"
+
+        Action = [
+
+          "ssm:UpdateInstanceInformation",
+
+          "ssmmessages:CreateControlChannel",
+
+          "ssmmessages:CreateDataChannel",
+
+          "ssmmessages:OpenControlChannel",
+
+          "ssmmessages:OpenDataChannel"
+
+        ]
+
+        Resource = "*"
+
+      }
+
+    ]
+
+  })
 
   # VPC configuration (optional - only set if provided)
 
