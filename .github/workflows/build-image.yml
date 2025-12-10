@@ -12,7 +12,7 @@ on:
 
         required: false
 
-        default: 'ca-central-1'
+        default: 'us-east-1'
 
         type: string
 
@@ -36,7 +36,7 @@ on:
 
 env:
 
-  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'ca-central-1' }}
+  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
 
   PKR_VAR_vpc_id: ${{ vars.VPC_ID || '' }}
 
@@ -44,13 +44,15 @@ env:
 
   PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || '' }}
 
+  PKR_VAR_security_group_ids: ${{ vars.SECURITY_GROUP_IDS || '' }}
+
 jobs:
 
   validate:
 
     name: Validate Packer Template
 
-    runs-on: terraform
+    runs-on: ubuntu-latest
 
     permissions:
 
@@ -168,6 +170,36 @@ jobs:
 
           fi
 
+      - name: Install RPM extraction tools
+
+        run: |
+
+          # Ensure rpm2cpio and cpio are available for extracting RPM packages
+
+          if ! command -v rpm2cpio >/dev/null 2>&1 || ! command -v cpio >/dev/null 2>&1; then
+
+            echo "Installing rpm and cpio tools..."
+
+            if command -v dnf >/dev/null 2>&1; then
+
+              sudo dnf install -y rpm cpio || echo "Warning: Could not install rpm/cpio"
+
+            elif command -v yum >/dev/null 2>&1; then
+
+              sudo yum install -y rpm cpio || echo "Warning: Could not install rpm/cpio"
+
+            else
+
+              echo "Warning: Package manager not found, rpm2cpio/cpio may not be available"
+
+            fi
+
+          else
+
+            echo "✅ rpm2cpio and cpio are already available"
+
+          fi
+
       - name: Install AWS Session Manager Plugin
 
         run: |
@@ -186,37 +218,57 @@ jobs:
 
             echo "Installing Session Manager Plugin..."
 
-            # Download and install Session Manager Plugin for Linux
+            # Download RPM package
 
             curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm" -o "/tmp/session-manager-plugin.rpm"
 
-            # Install using dnf or yum
+            # Always extract and install manually to avoid RPM database permission issues
 
-            if command -v dnf >/dev/null 2>&1; then
+            echo "Extracting RPM package manually..."
 
-              sudo dnf install -y /tmp/session-manager-plugin.rpm
+            mkdir -p /tmp/session-manager-plugin
 
-            elif command -v yum >/dev/null 2>&1; then
+            cd /tmp/session-manager-plugin
 
-              sudo yum install -y /tmp/session-manager-plugin.rpm
+            # Extract RPM using rpm2cpio and cpio
 
-            else
-
-              # Fallback: extract and install manually
-
-              echo "Package manager not found, installing manually..."
-
-              mkdir -p /tmp/session-manager-plugin
-
-              cd /tmp/session-manager-plugin
+            if command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then
 
               rpm2cpio /tmp/session-manager-plugin.rpm | cpio -idmv
 
-              sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/bin/
+            else
 
-              sudo chmod +x /usr/local/bin/session-manager-plugin
+              echo "❌ ERROR: rpm2cpio and cpio are required to extract the RPM package"
+
+              echo "Please install: dnf install -y rpm cpio"
+
+              exit 1
 
             fi
+
+            # Install the binary
+
+            if [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
+
+              sudo mkdir -p /usr/local/sessionmanagerplugin/bin
+
+              sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/sessionmanagerplugin/bin/
+
+              sudo chmod +x /usr/local/sessionmanagerplugin/bin/session-manager-plugin
+
+              sudo ln -sf /usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/bin/session-manager-plugin
+
+            else
+
+              echo "❌ ERROR: Could not find session-manager-plugin binary after extraction"
+
+              exit 1
+
+            fi
+
+            # Clean up
+
+            rm -rf /tmp/session-manager-plugin /tmp/session-manager-plugin.rpm
 
             # Verify installation
 
@@ -420,7 +472,7 @@ jobs:
 
     needs: validate
 
-    runs-on: terraform
+    runs-on: ubuntu-latest
 
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
 
@@ -488,6 +540,36 @@ jobs:
 
           fi
 
+      - name: Install RPM extraction tools
+
+        run: |
+
+          # Ensure rpm2cpio and cpio are available for extracting RPM packages
+
+          if ! command -v rpm2cpio >/dev/null 2>&1 || ! command -v cpio >/dev/null 2>&1; then
+
+            echo "Installing rpm and cpio tools..."
+
+            if command -v dnf >/dev/null 2>&1; then
+
+              sudo dnf install -y rpm cpio || echo "Warning: Could not install rpm/cpio"
+
+            elif command -v yum >/dev/null 2>&1; then
+
+              sudo yum install -y rpm cpio || echo "Warning: Could not install rpm/cpio"
+
+            else
+
+              echo "Warning: Package manager not found, rpm2cpio/cpio may not be available"
+
+            fi
+
+          else
+
+            echo "✅ rpm2cpio and cpio are already available"
+
+          fi
+
       - name: Install AWS Session Manager Plugin
 
         run: |
@@ -506,37 +588,57 @@ jobs:
 
             echo "Installing Session Manager Plugin..."
 
-            # Download and install Session Manager Plugin for Linux
+            # Download RPM package
 
             curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm" -o "/tmp/session-manager-plugin.rpm"
 
-            # Install using dnf or yum
+            # Always extract and install manually to avoid RPM database permission issues
 
-            if command -v dnf >/dev/null 2>&1; then
+            echo "Extracting RPM package manually..."
 
-              sudo dnf install -y /tmp/session-manager-plugin.rpm
+            mkdir -p /tmp/session-manager-plugin
 
-            elif command -v yum >/dev/null 2>&1; then
+            cd /tmp/session-manager-plugin
 
-              sudo yum install -y /tmp/session-manager-plugin.rpm
+            # Extract RPM using rpm2cpio and cpio
 
-            else
-
-              # Fallback: extract and install manually
-
-              echo "Package manager not found, installing manually..."
-
-              mkdir -p /tmp/session-manager-plugin
-
-              cd /tmp/session-manager-plugin
+            if command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then
 
               rpm2cpio /tmp/session-manager-plugin.rpm | cpio -idmv
 
-              sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/bin/
+            else
 
-              sudo chmod +x /usr/local/bin/session-manager-plugin
+              echo "❌ ERROR: rpm2cpio and cpio are required to extract the RPM package"
+
+              echo "Please install: dnf install -y rpm cpio"
+
+              exit 1
 
             fi
+
+            # Install the binary
+
+            if [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
+
+              sudo mkdir -p /usr/local/sessionmanagerplugin/bin
+
+              sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/sessionmanagerplugin/bin/
+
+              sudo chmod +x /usr/local/sessionmanagerplugin/bin/session-manager-plugin
+
+              sudo ln -sf /usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/bin/session-manager-plugin
+
+            else
+
+              echo "❌ ERROR: Could not find session-manager-plugin binary after extraction"
+
+              exit 1
+
+            fi
+
+            # Clean up
+
+            rm -rf /tmp/session-manager-plugin /tmp/session-manager-plugin.rpm
 
             # Verify installation
 
@@ -861,6 +963,20 @@ jobs:
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"subnet_id=${{ env.PKR_VAR_subnet_id }}\""
 
             echo "Using Subnet ID: ${{ env.PKR_VAR_subnet_id }}"
+
+          fi
+
+          # Add security group IDs if provided (recommended for private subnets)
+
+          if [ -n "${{ env.PKR_VAR_security_group_ids }}" ]; then
+
+            # Convert comma-separated list to Packer list format
+
+            SG_IDS="${{ env.PKR_VAR_security_group_ids }}"
+
+            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"security_group_ids=[\\\"${SG_IDS//,/\",\"}\\\"]\""
+
+            echo "Using Security Group IDs: ${{ env.PKR_VAR_security_group_ids }}"
 
           fi
 

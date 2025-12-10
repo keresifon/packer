@@ -26,7 +26,7 @@ variable "aws_region" {
 
   description = "AWS region to build the image in"
 
-  default     = "ca-central-1"
+  default     = "us-east-1"
 
 }
 
@@ -79,6 +79,16 @@ variable "subnet_id" {
   description = "Subnet ID to launch instance in (optional - will use default subnet if not specified)"
 
   default     = ""
+
+}
+
+variable "security_group_ids" {
+
+  type        = list(string)
+
+  description = "List of security group IDs to attach to the instance (optional - Packer creates temporary one if not specified). For private subnets, pre-create a security group with outbound HTTPS (443) to VPC endpoints."
+
+  default     = []
 
 }
 
@@ -186,19 +196,67 @@ source "amazon-ebs" "amazonlinux2023" {
 
   # SSM works with private IPs, so public IP is not required
 
+  # IMPORTANT: For private subnets:
+
+  # Option A: Private subnet with NAT Gateway (internet access via NAT)
+
+  #    - No VPC endpoints required (but recommended for cost savings)
+
+  #    - Security group needs outbound HTTPS (443) to 0.0.0.0/0 (or NAT Gateway)
+
+  #    - Package installation works normally (via NAT Gateway)
+
+  #    - SSM Session Manager works via NAT Gateway
+
+  # Option B: Private subnet with NO internet (fully isolated)
+
+  #    - VPC endpoints REQUIRED for AWS services:
+
+  #      * com.amazonaws.region.ssm (SSM service)
+
+  #      * com.amazonaws.region.ssmmessages (SSM messages)
+
+  #      * com.amazonaws.region.ec2 (EC2 API)
+
+  #      * com.amazonaws.region.s3 (S3 - Gateway endpoint)
+
+  #      * com.amazonaws.region.sts (Security Token Service)
+
+  #    - Security group must allow outbound HTTPS (443) to VPC endpoints
+
+  #    - Route table must have routes to VPC endpoints
+
+  #    - For package installation, use VPC endpoint for S3 or pre-download packages
+
   vpc_id    = var.vpc_id != "" ? var.vpc_id : null
 
   subnet_id = var.subnet_id != "" ? var.subnet_id : null
 
+  # Explicitly disable public IP assignment (private subnet)
+
+  # With NAT Gateway, instances use private IPs but can access internet via NAT
+
+  associate_public_ip_address = false
+
   # Security group configuration
 
-  # Packer creates a temporary security group automatically
+  # IMPORTANT: When using ssh_interface = "session_manager", Packer should NOT create SSH rules
 
-  # With SSM, no inbound ports need to be opened (SSM uses outbound HTTPS)
+  # For private subnets, you MUST pre-create a security group with:
 
-  # If you have issues, you can pre-create a security group and specify it here:
+  # - Outbound HTTPS (443) to VPC endpoints (or 0.0.0.0/0 if using VPC endpoints)
 
-  # security_group_ids = ["sg-xxxxxxxxx"]
+  # - No inbound rules required (SSM uses outbound connections)
+
+  # Packer will create a temporary security group if security_group_ids is not specified
+
+  # With ssh_interface = "session_manager", Packer should detect SSM and skip SSH port 22 rules
+
+  # RECOMMENDED: Pre-create a security group and specify it here for private subnets:
+
+  # The security group must allow outbound HTTPS (443) to VPC endpoints
+
+  security_group_ids = length(var.security_group_ids) > 0 ? var.security_group_ids : null
 
   # Tags for the AMI
 
@@ -262,15 +320,19 @@ build {
 
   # Amazon Linux 2023 uses dnf package manager
 
+  # Note: Check if sudo exists, if not assume we're root
+
   provisioner "shell" {
 
     inline = [
 
-      "sudo dnf update -y",
+      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
 
-      "sudo dnf upgrade -y",
+      "${SUDO} dnf update -y",
 
-      "sudo dnf clean all"
+      "${SUDO} dnf upgrade -y",
+
+      "${SUDO} dnf clean all"
 
     ]
 
@@ -282,11 +344,15 @@ build {
 
     inline = [
 
+      "# Determine if sudo is available, if not assume we're root",
+
+      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+
       "# Install common utilities",
 
-      "sudo dnf install -y curl wget git unzip",
+      "${SUDO} dnf install -y curl wget git unzip",
 
-      "sudo dnf install -y htop net-tools",
+      "${SUDO} dnf install -y htop net-tools",
 
       "# Install AWS CLI v2 using official installer",
 
@@ -294,13 +360,13 @@ build {
 
       "unzip -q /tmp/awscliv2.zip -d /tmp",
 
-      "sudo /tmp/aws/install",
+      "${SUDO} /tmp/aws/install",
 
       "rm -rf /tmp/aws /tmp/awscliv2.zip",
 
       "# Install jq",
 
-      "sudo dnf install -y jq || echo 'Warning: jq installation skipped'"
+      "${SUDO} dnf install -y jq || echo 'Warning: jq installation skipped'"
 
     ]
 
@@ -314,13 +380,17 @@ build {
 
     inline = [
 
+      "# Determine if sudo is available, if not assume we're root",
+
+      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+
       "# Ensure SSM Agent is enabled and running",
 
-      "sudo systemctl enable amazon-ssm-agent",
+      "${SUDO} systemctl enable amazon-ssm-agent",
 
-      "sudo systemctl start amazon-ssm-agent",
+      "${SUDO} systemctl start amazon-ssm-agent",
 
-      "sudo systemctl status amazon-ssm-agent || true"
+      "${SUDO} systemctl status amazon-ssm-agent || true"
 
     ]
 
@@ -332,25 +402,29 @@ build {
 
     inline = [
 
+      "# Determine if sudo is available, if not assume we're root",
+
+      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+
       "# Clean up cloud-init",
 
-      "sudo cloud-init clean",
+      "${SUDO} cloud-init clean",
 
-      "sudo rm -f /var/log/cloud-init*.log",
+      "${SUDO} rm -f /var/log/cloud-init*.log",
 
       "# Clean up temporary files",
 
-      "sudo rm -rf /tmp/*",
+      "${SUDO} rm -rf /tmp/*",
 
-      "sudo rm -rf /var/tmp/*",
+      "${SUDO} rm -rf /var/tmp/*",
 
       "# Clean up package cache",
 
-      "sudo dnf clean all",
+      "${SUDO} dnf clean all",
 
       "# Sync filesystem",
 
-      "sudo sync"
+      "${SUDO} sync"
 
     ]
 
