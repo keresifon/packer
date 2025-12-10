@@ -168,6 +168,56 @@ jobs:
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
 
+      - name: Install AWS CLI (if needed)
+        run: |
+          if command -v aws >/dev/null 2>&1; then
+            echo "AWS CLI is already installed"
+            aws --version
+          else
+            echo "Installing AWS CLI..."
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip -q awscliv2.zip
+            ./aws/install
+            rm -rf aws awscliv2.zip
+            aws --version
+          fi
+
+      - name: Validate AWS Credentials
+        run: |
+          echo "=== Validating AWS Credentials ==="
+          
+          # Test AWS credentials by calling STS GetCallerIdentity
+          # This is the same call Packer makes when validating credentials
+          if aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}" > /dev/null 2>&1; then
+            echo "✅ AWS credentials are valid"
+            aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}"
+          else
+            echo "❌ ERROR: AWS credentials validation failed"
+            echo ""
+            echo "This error occurs when Packer tries to query AWS (e.g., for AMI data sources)."
+            echo ""
+            echo "Troubleshooting steps:"
+            echo "1. Verify AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are correct"
+            echo "2. If using AWS SSO, ensure AWS_SESSION_TOKEN secret is set and not expired"
+            echo "3. Check that credentials have required IAM permissions (sts:GetCallerIdentity, ec2:DescribeImages, etc.)"
+            echo "4. Verify no extra whitespace or newlines in secret values"
+            echo "5. Ensure credentials are active and not revoked"
+            echo ""
+            echo "Testing with verbose output:"
+            aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}" || true
+            exit 1
+          fi
+          
+          echo ""
+          echo "=== Testing EC2 Permissions ==="
+          # Test if we can describe images (required for Packer data source)
+          if aws ec2 describe-images --owners 099720109477 --region "${{ env.PKR_VAR_aws_region }}" --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" --query 'Images[0].ImageId' --output text > /dev/null 2>&1; then
+            echo "✅ Can query EC2 images (required for Packer AMI data source)"
+          else
+            echo "⚠️  WARNING: Cannot query EC2 images. This may cause Packer build to fail."
+            echo "Required permission: ec2:DescribeImages"
+          fi
+
       - name: Validate Packer template
         run: packer validate ubuntu-golden-image.pkr.hcl
 
@@ -281,6 +331,57 @@ jobs:
       - name: Initialize Packer
         run: packer init ubuntu-golden-image.pkr.hcl
 
+      - name: Install AWS CLI (if needed)
+        run: |
+          if command -v aws >/dev/null 2>&1; then
+            echo "AWS CLI is already installed"
+            aws --version
+          else
+            echo "Installing AWS CLI..."
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip -q awscliv2.zip
+            ./aws/install
+            rm -rf aws awscliv2.zip
+            aws --version
+          fi
+
+      - name: Validate AWS Credentials
+        run: |
+          echo "=== Validating AWS Credentials ==="
+          
+          # Test AWS credentials by calling STS GetCallerIdentity
+          # This is the same call Packer makes when validating credentials
+          if aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}" > /dev/null 2>&1; then
+            echo "✅ AWS credentials are valid"
+            aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}"
+          else
+            echo "❌ ERROR: AWS credentials validation failed"
+            echo ""
+            echo "This error occurs when Packer tries to query AWS (e.g., for AMI data sources)."
+            echo "The same credentials are used in both validate and build jobs."
+            echo ""
+            echo "Troubleshooting steps:"
+            echo "1. Verify AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are correct"
+            echo "2. If using AWS SSO, ensure AWS_SESSION_TOKEN secret is set and not expired"
+            echo "3. Check that credentials have required IAM permissions (sts:GetCallerIdentity, ec2:DescribeImages, etc.)"
+            echo "4. Verify no extra whitespace or newlines in secret values"
+            echo "5. Ensure credentials are active and not revoked"
+            echo ""
+            echo "Testing with verbose output:"
+            aws sts get-caller-identity --region "${{ env.PKR_VAR_aws_region }}" || true
+            exit 1
+          fi
+          
+          echo ""
+          echo "=== Testing EC2 Permissions ==="
+          # Test if we can describe images (required for Packer data source)
+          if aws ec2 describe-images --owners 099720109477 --region "${{ env.PKR_VAR_aws_region }}" --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" --query 'Images[0].ImageId' --output text > /dev/null 2>&1; then
+            echo "✅ Can query EC2 images (required for Packer AMI data source)"
+          else
+            echo "⚠️  WARNING: Cannot query EC2 images. This may cause Packer build to fail."
+            echo "Required permission: ec2:DescribeImages"
+          fi
+
       - name: Validate VPC and Subnet Configuration
         run: |
           VPC_ID="${{ env.PKR_VAR_vpc_id }}"
@@ -307,9 +408,15 @@ jobs:
             echo "✅ Both VPC and Subnet IDs are configured"
             echo "⚠️  Important: Ensure the subnet '$SUBNET_ID' exists in VPC '$VPC_ID' in region '$REGION'"
             echo ""
-            echo "To verify, run:"
-            echo "  aws ec2 describe-subnets --subnet-ids $SUBNET_ID --region $REGION --query 'Subnets[0].VpcId'"
-            echo "  (Should return: $VPC_ID)"
+            echo "If you get 'InvalidSubnetID.NotFound' errors, check:"
+            echo "  1. The subnet exists in region '$REGION' (not a different region)"
+            echo "  2. The subnet belongs to VPC '$VPC_ID'"
+            echo "  3. The subnet ID is correct (no typos)"
+            echo ""
+            echo "To find available subnets in your VPC for region '$REGION', run locally:"
+            echo "  aws ec2 describe-subnets --filters \"Name=vpc-id,Values=$VPC_ID\" --region $REGION --query 'Subnets[*].[SubnetId,AvailabilityZone,CidrBlock]' --output table"
+            echo ""
+            echo "Then update the SUBNET_ID repository variable with a valid subnet ID from the list above."
           fi
 
       - name: Build Packer image
