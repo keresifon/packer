@@ -1,0 +1,19 @@
+---
+# CIS 1.1 Compliance Checks - Filesystem Configuration
+
+- name: Check CIS 1.1.1.1 - cramfs disabled
+  stat:
+    path: /etc/modprobe.d/CIS.conf
+  register: cis_conf
+
+- name: Verify cramfs is disabled
+  shell: |
+    if grep -q "install cramfs /bin/true" /etc/modprobe.d/CIS.conf; then
+      echo "PASS"
+    else
+      echo "FAIL"
+    fi
+  register: cramfs_check
+  failed_when: false
+  changed_when: false
+

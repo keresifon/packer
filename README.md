@@ -1,6 +1,6 @@
 # Ubuntu Golden Image Builder with Packer
 
-This repository automates the creation of Ubuntu golden images (AMIs) on AWS using Packer, GitHub Actions for CI/CD, and HCP Packer for image lifecycle management. All builds run automatically through GitHub Actions - no local setup required.
+This repository automates the creation of Ubuntu golden images (AMIs) on AWS using Packer and GitHub Actions for CI/CD. All builds run automatically through GitHub Actions - no local setup required. The project includes CIS benchmark hardening, automated validation, and multi-region AMI distribution.
 
 ## Overview
 
@@ -9,16 +9,17 @@ This project provides a fully automated pipeline for building Ubuntu golden imag
 - **Packer**: Infrastructure as Code tool for creating machine images
 - **AWS**: Cloud platform for building and storing AMIs
 - **GitHub Actions**: CI/CD pipeline that handles all builds automatically
-- **HCP Packer**: HashiCorp Cloud Platform for image versioning and metadata management
 
 ### Key Features
 
 - ✅ **Fully Automated**: All builds run through GitHub Actions - no local setup needed
 - ✅ **Secure Authentication**: Uses AWS OIDC (no access keys required)
-- ✅ **Auto-Bucket Creation**: HCP Packer bucket is created automatically on first build
-- ✅ **Version Tracking**: Every build is tracked in HCP Packer with metadata
+- ✅ **CIS Hardening**: Automated CIS Ubuntu 22.04 LTS Level 2 benchmark compliance
 - ✅ **Encrypted AMIs**: All AMIs are encrypted by default
 - ✅ **Tagged Resources**: AMIs and snapshots are automatically tagged
+- ✅ **Post-Build Validation**: Automated AMI validation with functional and security tests
+- ✅ **Multi-Region Distribution**: Automatically copies AMIs to target regions
+- ✅ **Parameter Store Integration**: Stores AMI IDs in Systems Manager for easy lookup
 
 ## Architecture & Workflow
 
@@ -60,20 +61,38 @@ This project provides a fully automated pipeline for building Ubuntu golden imag
 │    c) Provision instance:                                   │
 │       - Update system packages                              │
 │       - Install common utilities                            │
-│       - Install AWS CLI                                     │
+│       - Install AWS CLI v2                                  │
+│       - Install Ansible                                     │
+│       - Apply CIS benchmark hardening (via Ansible)         │
+│       - Run CIS compliance check                            │
 │       - Harden SSH configuration                            │
 │       - Clean up temporary files                            │
 │    d) Create AMI snapshot                                   │
 │    e) Register AMI in AWS                                   │
-│    f) Publish metadata to HCP Packer                       │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 5. Output                                                   │
+│ 5. Post-Build Validation                                    │
+│    - Launch test instance from AMI                          │
+│    - Run functional and security tests                       │
+│    - Verify CIS compliance                                  │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 6. AMI Distribution (Optional)                             │
+│    - Copy AMI to target regions                            │
+│    - Store AMI IDs in Parameter Store                      │
+│    - Tag copied AMIs                                        │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 7. Output                                                   │
 │    - AMI available in AWS EC2                               │
-│    - Metadata published to HCP Packer                      │
-│    - Build iteration tracked with fingerprint               │
+│    - AMI ID displayed in build output                       │
+│    - Ready to use for launching instances                   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -110,16 +129,7 @@ Before setting up this repository, ensure you have:
   - Key pairs (temporary)
 - **OIDC Identity Provider** configured (see setup below)
 
-### 2. HCP Packer Account
-
-- **HCP Account** (sign up at https://portal.cloud.hashicorp.com)
-- **Organization** created in HCP
-- **Project** created in HCP
-- **Service Principal** credentials:
-  - Client ID
-  - Client Secret
-
-### 3. GitHub Repository
+### 2. GitHub Repository
 
 - **Repository** with GitHub Actions enabled
 - **Access** to configure secrets and workflows
@@ -129,147 +139,51 @@ Before setting up this repository, ensure you have:
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/keresifon/packer.git
+git clone https://github.com/your-username/packer.git
 cd packer
 ```
 
-### Step 2: Configure AWS OIDC Identity Provider
+### Step 2: Configure AWS OIDC Authentication
 
-OIDC (OpenID Connect) allows GitHub Actions to authenticate with AWS without storing access keys. This is more secure than using access keys.
+This project uses AWS OIDC (OpenID Connect) for secure authentication between GitHub Actions and AWS. This eliminates the need to store AWS access keys as secrets.
 
-#### 2.1 Create OIDC Identity Provider in AWS
+**📖 For detailed step-by-step instructions, see [AWS OIDC Setup Guide](docs/AWS-OIDC-SETUP.md)**
 
-1. Log into AWS Console
-2. Navigate to **IAM** → **Identity providers**
-3. Click **Add provider**
-4. Select **OpenID Connect**
-5. Configure:
-   - **Provider URL**: `https://token.actions.githubusercontent.com`
-   - **Audience**: `sts.amazonaws.com`
-6. Click **Add provider**
+The guide includes:
+- Creating OIDC Identity Provider in AWS
+- Creating IAM Role with proper trust policy
+- Configuring all required IAM permissions
+- Setting up GitHub Secrets
+- Troubleshooting common issues
 
-#### 2.2 Create IAM Role for GitHub Actions
+**Quick Summary:**
+1. Create OIDC Identity Provider in AWS IAM (`https://token.actions.githubusercontent.com`)
+2. Create IAM Role with trust policy allowing your GitHub repository
+3. Attach permissions policy with required EC2 and SSM permissions (see [AWS-OIDC-SETUP.md](docs/AWS-OIDC-SETUP.md) for complete list)
+4. Add `AWS_ROLE_ARN` secret to GitHub repository
 
-1. Navigate to **IAM** → **Roles** → **Create role**
-2. Select **Web identity**
-3. Choose the identity provider you just created:
-   - **Identity provider**: `token.actions.githubusercontent.com`
-   - **Audience**: `sts.amazonaws.com`
-4. Click **Next**
-5. **Configure conditions** (optional but recommended):
-   ```json
-   {
-     "StringEquals": {
-       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-     },
-     "StringLike": {
-       "token.actions.githubusercontent.com:sub": "repo:YOUR_GITHUB_USERNAME/YOUR_REPO_NAME:*"
-     }
-   }
-   ```
-   Replace `YOUR_GITHUB_USERNAME` and `YOUR_REPO_NAME` with your actual values.
-6. Click **Next**
-7. **Attach policies** with these permissions:
-   - `AmazonEC2FullAccess` (or create a custom policy with least privilege)
-   
-   **Minimum required permissions:**
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [
-       {
-         "Effect": "Allow",
-         "Action": [
-           "ec2:DescribeImages",
-           "ec2:DescribeInstances",
-           "ec2:RunInstances",
-           "ec2:CreateImage",
-           "ec2:CreateTags",
-           "ec2:CreateSnapshot",
-           "ec2:DescribeSnapshots",
-           "ec2:DeleteSnapshot",
-           "ec2:TerminateInstances",
-           "ec2:DeregisterImage",
-           "ec2:DescribeRegions",
-           "ec2:DescribeAvailabilityZones",
-           "ec2:CreateSecurityGroup",
-           "ec2:DeleteSecurityGroup",
-           "ec2:AuthorizeSecurityGroupIngress",
-           "ec2:CreateKeyPair",
-           "ec2:DeleteKeyPair",
-           "ec2:DescribeKeyPairs"
-         ],
-         "Resource": "*"
-       }
-     ]
-   }
-   ```
-8. Click **Next**
-9. **Name the role**: e.g., `github-actions-packer`
-10. **Add description**: "IAM role for GitHub Actions to build Packer AMIs"
-11. Click **Create role**
-12. **Copy the Role ARN** - you'll need this for GitHub Secrets
-   - Format: `arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME`
+**Required IAM Permissions:**
+- EC2: Run instances, create images, manage snapshots, security groups, key pairs
+- SSM Parameter Store: Put/get parameters for AMI ID storage
+- See [AWS-OIDC-SETUP.md](docs/AWS-OIDC-SETUP.md#required-iam-permissions) for the complete permissions list
 
-### Step 3: Set Up HCP Packer
+### Step 3: Configure Build Settings (Optional)
 
-#### 3.1 Create HCP Account and Project
+Edit `config/build-config.yml` to customize:
+- Default AWS region and Ubuntu version
+- Instance types for build and validation
+- CIS compliance thresholds
+- Target regions for AMI distribution
+- Parameter Store settings
 
-1. Go to https://portal.cloud.hashicorp.com
-2. Sign up or log in
-3. Create or select an **Organization**
-4. Create or select a **Project**
+See [Configuration Guide](config/README.md) for details.
 
-#### 3.2 Create Service Principal
+### Step 4: Verify Setup
 
-1. Navigate to **Access Control** → **Service Principals**
-2. Click **Create service principal**
-3. Name it (e.g., `github-actions-packer`)
-4. **Save the credentials**:
-   - **Client ID** (you'll need this)
-   - **Client Secret** (you'll need this - save it securely!)
-
-#### 3.3 Get Organization and Project IDs
-
-- **Organization ID**: Found in the URL or Settings
-  - URL format: `https://portal.cloud.hashicorp.com/orgs/ORG_ID/...`
-- **Project ID**: Found in the URL or Settings
-  - URL format: `https://portal.cloud.hashicorp.com/orgs/ORG_ID/projects/PROJECT_ID/...`
-
-**Note**: The HCP Packer bucket (`ubuntu-golden-image`) will be created automatically on the first build. You don't need to create it manually.
-
-### Step 4: Configure GitHub Secrets
-
-GitHub Secrets store sensitive information that the workflow needs to authenticate with AWS and HCP Packer.
-
-1. Go to your GitHub repository
-2. Navigate to **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret** for each of the following:
-
-#### AWS Secrets
-
-- **Name**: `AWS_ROLE_ARN`
-- **Value**: The ARN of the IAM role you created (e.g., `arn:aws:iam::123456789012:role/github-actions-packer`)
-
-#### HCP Packer Secrets
-
-- **Name**: `HCP_CLIENT_ID`
-- **Value**: Your HCP service principal Client ID
-
-- **Name**: `HCP_CLIENT_SECRET`
-- **Value**: Your HCP service principal Client Secret
-
-- **Name**: `HCP_ORGANIZATION_ID`
-- **Value**: Your HCP Organization ID
-
-- **Name**: `HCP_PROJECT_ID`
-- **Value**: Your HCP Project ID
-
-### Step 5: Verify Setup
-
-1. **Check GitHub Secrets**: Ensure all 5 secrets are configured
+1. **Check GitHub Secrets**: Ensure `AWS_ROLE_ARN` secret is configured
 2. **Check AWS Role**: Verify the IAM role exists and has correct permissions
-3. **Check HCP Project**: Verify you can access your HCP project
+3. **Verify Workflow File**: Ensure `.github/workflows/build-image.yml` exists
+4. **Test Build**: Run a manual workflow dispatch to verify everything works
 
 ## Usage
 
@@ -321,7 +235,6 @@ GitHub Secrets store sensitive information that the workflow needs to authentica
      - SSH connection
      - Provisioning steps
      - AMI creation
-     - HCP Packer publishing
 
 #### What to Look For
 
@@ -329,15 +242,21 @@ GitHub Secrets store sensitive information that the workflow needs to authentica
 - ✅ All steps show green checkmarks
 - ✅ "Build AMI" job completes successfully
 - ✅ Final step shows "AMI build completed successfully!"
+- ✅ Build output displays the AMI ID:
+  ```
+  ==> Builds finished. The artifacts of successful builds are:
+  --> amazon-ebs.ubuntu: AMIs were created:
+  us-east-1: ami-xxxxxxxxxxxxxxxxx
+  ```
 
 **Failed Build:**
 - ❌ Red X on failed step
 - Click on the failed step to see error details
 - Common issues:
   - AWS permissions
-  - HCP authentication
   - Template syntax errors
   - Package installation failures
+  - Network connectivity issues
 
 ### Build Duration
 
@@ -359,17 +278,19 @@ GitHub Secrets store sensitive information that the workflow needs to authentica
    - **Status**: `available` (after snapshot completes)
    - **Name**: `ubuntu-golden-image-YYYY-MM-DD-HHMM`
    - **Creation Date**: When the build completed
+   - **AMI ID**: e.g., `ami-xxxxxxxxxxxxxxxxx`
 
-#### In HCP Packer
+#### From Build Output
 
-1. Go to https://portal.cloud.hashicorp.com
-2. Navigate to your **Organization** → **Project** → **Packer**
-3. Click on **Buckets** → `ubuntu-golden-image`
-4. You'll see:
-   - **Build iterations** with timestamps
-   - **Build fingerprint** (e.g., `01KBEJ6TYB1YNR80F7W7KNED0B`)
-   - **AMI IDs** per region
-   - **Labels**: os, version, region, managed-by
+The AMI ID is displayed at the end of a successful build in the GitHub Actions logs:
+
+```
+==> Builds finished. The artifacts of successful builds are:
+--> amazon-ebs.ubuntu: AMIs were created:
+us-east-1: ami-xxxxxxxxxxxxxxxxx
+```
+
+Copy the AMI ID from the build output for immediate use.
 
 ### Using the AMI
 
@@ -401,21 +322,34 @@ resource "aws_instance" "example" {
 }
 ```
 
-#### Use with HCP Packer (Recommended)
+#### Use AMI ID Directly
+
+If you know the AMI ID from the build output:
 
 ```hcl
-# Using HCP Packer data source
-data "hcp-packer-image" "ubuntu" {
-  bucket_name  = "ubuntu-golden-image"
-  channel_name = "latest"  # or specific iteration
-  region       = "us-east-1"
-}
-
 resource "aws_instance" "example" {
-  ami           = data.hcp-packer-image.ubuntu.cloud_image_id
+  ami           = "ami-xxxxxxxxxxxxxxxxx"  # Replace with your AMI ID
   instance_type = "t3.micro"
 }
 ```
+
+#### Use AMI from Parameter Store (Multi-Region)
+
+AMIs are automatically stored in AWS Systems Manager Parameter Store for easy cross-region access:
+
+```hcl
+# Get latest AMI ID from Parameter Store
+data "aws_ssm_parameter" "ami_us_west_2" {
+  name = "/packer/ubuntu-golden-image/us-west-2/latest"
+}
+
+resource "aws_instance" "example" {
+  ami           = data.aws_ssm_parameter.ami_us_west_2.value
+  instance_type = "t3.micro"
+}
+```
+
+See [AMI-DISTRIBUTION.md](docs/AMI-DISTRIBUTION.md) for detailed information about multi-region distribution.
 
 ## Workflow Details
 
@@ -450,16 +384,15 @@ resource "aws_instance" "example" {
    - Launches EC2 instance
    - Provisions the instance
    - Creates AMI snapshot
-   - Registers AMI
-   - Publishes to HCP Packer
+   - Registers AMI in AWS
 
 **Duration**: ~8-15 minutes
 
 **Failure Points**:
 - AWS permissions issues
-- HCP authentication failures
 - Provisioning script errors
 - Network connectivity issues
+- Package installation failures
 
 ### Environment Variables
 
@@ -467,7 +400,6 @@ The workflow sets these environment variables:
 
 - `PKR_VAR_aws_region`: AWS region (default: `us-east-1`)
 - `PKR_VAR_ubuntu_version`: Ubuntu version (default: `22.04`)
-- `PKR_VAR_hcp_bucket_name`: HCP bucket name (`ubuntu-golden-image`)
 
 These are passed to Packer as variables during the build.
 
@@ -481,7 +413,7 @@ The golden image includes:
 
 ### Installed Packages
 - **Utilities**: curl, wget, git, unzip
-- **AWS Tools**: AWS CLI
+- **AWS Tools**: AWS CLI v2 (installed via official installer)
 - **Monitoring**: htop, net-tools
 - **Optional**: jq (if dependencies available)
 
@@ -489,58 +421,145 @@ The golden image includes:
 - SSH root login disabled
 - Password authentication disabled
 - SSH configuration hardened
+- **CIS Ubuntu 22.04 LTS Benchmark compliance** (see CIS Benchmarking section below)
+
+### CIS Benchmarking
+The image includes automated CIS (Center for Internet Security) Ubuntu 22.04 LTS benchmark hardening at **Level 2** (includes all Level 1 controls plus additional hardening):
+
+**Level 1 Controls:**
+- **Filesystem Configuration**: Disables unnecessary filesystem types (cramfs, squashfs, udf)
+- **Process Hardening**: Core dumps restricted, ASLR enabled
+- **Mandatory Access Control**: AppArmor installed and configured
+- **Network Security**: IP forwarding disabled, SYN cookies enabled, packet redirects disabled
+- **System File Permissions**: Proper permissions on critical system files (/etc/passwd, /etc/shadow, etc.)
+- **Service Hardening**: Unnecessary services removed (xinetd, NIS, rsh, telnet, etc.)
+- **Logging**: rsyslog configured and enabled
+- **Time Synchronization**: chrony configured for accurate timekeeping
+- **Warning Banners**: Login banners configured
+
+**Level 2 Additional Controls:**
+- **Enhanced Filesystem Restrictions**: Additional filesystem types disabled (freevxfs, jffs2, hfs, hfsplus)
+- **Advanced Process Hardening**: Kernel dmesg restrictions, unprivileged BPF disabled
+- **Enhanced Network Security**: Additional network hardening parameters, IPv6 restrictions
+- **Strict SSH Configuration**: Protocol 2 only, approved ciphers/MACs/KEX algorithms, connection timeouts
+- **Password Policies**: Password expiration, minimum days, warning periods configured
+- **Enhanced Logging**: Journald forwarding, persistent storage, remote logging support
+- **Cron Security**: Restricted cron access, proper permissions on cron directories
+- **Additional Service Removals**: More services removed (RPC, Avahi, CUPS, DHCP, DNS, FTP, HTTP, Samba, etc.)
+
+A CIS compliance check runs during the build process to verify compliance. The audit is non-blocking by default but can be configured to fail the build if compliance is below threshold.
 
 ### Cleanup
 - Cloud-init logs cleared
 - Temporary files removed
 - System cache cleaned
 
-## HCP Packer Integration
+## CIS Benchmarking
 
-### Automatic Bucket Creation
+### Overview
 
-The HCP Packer bucket (`ubuntu-golden-image`) is created automatically on the first build. You don't need to create it manually.
+This project includes automated CIS (Center for Internet Security) Ubuntu 22.04 LTS benchmark hardening. The CIS benchmarks provide a set of security configuration guidelines to help organizations secure their systems.
 
-### Published Metadata
+### Implementation
 
-Each build publishes:
-- **Build fingerprint**: Unique identifier for the build
-- **AMI ID**: The created AMI ID
-- **Region**: AWS region where AMI was created
-- **Labels**:
-  - `os`: ubuntu
-  - `version`: Ubuntu version (22.04, 20.04, etc.)
-  - `region`: AWS region
-  - `managed-by`: packer
+The CIS hardening is implemented using **Ansible playbooks** for better maintainability and idempotency:
 
-### Querying Images
+1. **`ansible/cis-hardening-playbook.yml`**: Applies CIS benchmark recommendations during image build
+2. **`ansible/cis-compliance-check.yml`**: Performs compliance checks and generates an audit report
 
-#### Via HCP Packer UI
+**Why Ansible?**
+- ✅ **Idempotent**: Safe to run multiple times
+- ✅ **Maintainable**: Structured playbooks, easier to read and modify
+- ✅ **Flexible**: Easy to customize which CIS sections to apply
+- ✅ **Better reporting**: Structured compliance reports
+- ✅ **Reusable**: Can leverage community CIS roles from Ansible Galaxy
 
-1. Go to HCP Packer → Buckets → `ubuntu-golden-image`
-2. View build iterations
-3. See AMI IDs per region
+### What Gets Hardened
 
-#### Via Terraform
+The hardening playbook implements **CIS Level 2** recommendations (includes all Level 1 plus additional controls):
 
+**Level 1 Controls:**
+- **Filesystem Security**: Disables unnecessary filesystem types (cramfs, squashfs, udf)
+- **Process Hardening**: Restricts core dumps, enables ASLR
+- **Network Security**: Configures secure network parameters (IP forwarding disabled, SYN cookies enabled)
+- **Access Control**: Sets up AppArmor mandatory access control
+- **System Permissions**: Ensures proper file permissions on critical system files
+- **Service Management**: Removes unnecessary and insecure services
+- **Logging**: Configures system logging (rsyslog)
+- **Time Synchronization**: Sets up accurate timekeeping (chrony)
+
+**Level 2 Additional Controls:**
+- **Enhanced Filesystem Security**: Additional filesystem types disabled (freevxfs, jffs2, hfs, hfsplus)
+- **Advanced Process Hardening**: Kernel dmesg restrictions, unprivileged BPF disabled
+- **Enhanced Network Security**: Additional network hardening, IPv6 restrictions, log martians
+- **Strict SSH Configuration**: Protocol 2 only, approved ciphers/MACs/KEX algorithms, connection timeouts, MaxAuthTries
+- **Password Policies**: Password expiration (365 days), minimum days (7), warning periods
+- **Enhanced Logging**: Journald forwarding, persistent storage, remote logging support
+- **Cron Security**: Restricted cron access, proper permissions on cron directories
+- **Comprehensive Service Removal**: Removes additional services (RPC, Avahi, CUPS, DHCP, DNS, FTP, HTTP, Samba, SNMP, etc.)
+
+### Audit Report
+
+During the build process, the CIS audit script runs automatically and generates a compliance report. The audit checks include:
+
+- Filesystem configuration compliance
+- Boot settings security
+- Process hardening verification
+- Network parameter validation
+- System file permission checks
+- Service configuration verification
+
+The audit is **non-blocking** - the build will continue even if some checks fail, but failures will be reported in the build logs for review.
+
+### Customizing CIS Hardening
+
+To modify the CIS hardening:
+
+1. Edit `ansible/cis-hardening-playbook.yml` to add or remove hardening tasks
+2. Edit `ansible/cis-compliance-check.yml` to add or modify compliance checks
+3. Adjust variables in the Packer template:
+   - `cis_level`: Set to 1 (Level 1) or 2 (Level 2)
+   - `cis_compliance_threshold`: Minimum compliance percentage (default: 80)
+   - `fail_on_non_compliance`: Set to `true` to fail build on non-compliance
+
+**Example:**
 ```hcl
-data "hcp-packer-image" "ubuntu" {
-  bucket_name  = "ubuntu-golden-image"
-  channel_name = "latest"
-  region       = "us-east-1"
-}
-
-output "ami_id" {
-  value = data.hcp-packer-image.ubuntu.cloud_image_id
-}
+packer build \
+  -var 'cis_level=2' \
+  -var 'cis_compliance_threshold=90' \
+  -var 'fail_on_non_compliance=true' \
+  ubuntu-golden-image.pkr.hcl
 ```
 
-#### Via HCP Packer API
+### Using Community CIS Roles
 
-```bash
-curl -H "Authorization: Bearer $HCP_TOKEN" \
-  https://api.cloud.hashicorp.com/packer/2023-01-01/organizations/{organization_id}/projects/{project_id}/images/{bucket_name}/iterations
+You can also use community-maintained CIS roles from Ansible Galaxy. Update `ansible/requirements.yml`:
+
+```yaml
+roles:
+  - name: devsec.cis_ubuntu_22_04
+    src: https://github.com/dev-sec/cis-ubuntu-22.04-ansible
 ```
+
+Then include the role in your playbook instead of manual tasks.
+
+### Disabling CIS Hardening
+
+If you need to disable CIS hardening:
+
+1. Comment out or remove the CIS provisioning blocks in `ubuntu-golden-image.pkr.hcl`:
+   ```hcl
+   # Provisioning: CIS Benchmark Hardening
+   # (comment out or remove these provisioner blocks)
+   ```
+
+2. Rebuild the image
+
+### CIS Benchmark Documentation
+
+For detailed information about CIS Ubuntu 22.04 LTS benchmarks, see:
+- [CIS Benchmarks](https://www.cisecurity.org/benchmark/ubuntu_linux)
+- [CIS Ubuntu 22.04 LTS Benchmark](https://www.cisecurity.org/cis-benchmarks/)
 
 ## Customization
 
@@ -587,19 +606,6 @@ provisioner "shell" {
 3. Ensure OIDC identity provider is configured correctly
 4. Check role trust policy includes your repository
 
-### Build Fails: "HCP Authentication Error"
-
-**Cause**: Invalid HCP credentials
-
-**Solution**:
-1. Verify all HCP secrets are correct:
-   - `HCP_CLIENT_ID`
-   - `HCP_CLIENT_SECRET`
-   - `HCP_ORGANIZATION_ID`
-   - `HCP_PROJECT_ID`
-2. Check service principal is active in HCP
-3. Verify organization/project IDs match your HCP setup
-
 ### Build Fails: "AMI Not Found"
 
 **Cause**: Source AMI doesn't exist in target region
@@ -618,6 +624,16 @@ provisioner "shell" {
 2. Verify package names are correct
 3. Check if packages are available in Ubuntu repositories
 4. Review error messages for specific package issues
+
+### Build Fails: "AWS CLI Installation Error"
+
+**Cause**: Network issues downloading AWS CLI installer
+
+**Solution**:
+1. Check network connectivity in build logs
+2. Verify the AWS CLI download URL is accessible
+3. Check if unzip is installed (required for AWS CLI installation)
+4. Review error messages for specific download issues
 
 ### AMI Stuck in "Pending"
 
@@ -648,7 +664,7 @@ provisioner "shell" {
 5. **Regular Updates**: Keep Packer and plugins updated
 6. **Image Hardening**: Review and customize provisioning scripts
 7. **Encryption**: AMIs are encrypted by default
-8. **Access Control**: Limit HCP Packer bucket access to authorized users
+8. **AMI Lifecycle**: Implement a process to track and manage AMI versions
 
 ## Project Structure
 
@@ -658,9 +674,25 @@ packer/
 │   └── workflows/
 │       └── build-image.yml          # GitHub Actions CI/CD workflow
 ├── .gitignore                        # Git ignore rules
-├── README.md                         # This file
-├── QUICKSTART.md                     # Quick start guide
-├── REPOSITORY_STRUCTURE.md          # Repository overview
+├── README.md                         # Main project documentation
+├── docs/                             # Documentation
+│   ├── AMI-DISTRIBUTION.md           # AMI distribution guide
+│   ├── CIS-IMPLEMENTATION-COMPARISON.md  # CIS implementation comparison
+│   ├── PIPELINE-TIMING.md            # Pipeline timing documentation
+│   └── VALIDATION.md                 # Validation documentation
+├── ansible/                          # Ansible playbooks and tasks
+│   ├── cis-hardening-playbook.yml    # Main CIS hardening playbook
+│   ├── cis-compliance-check.yml     # CIS compliance check playbook
+│   ├── ami-validation-playbook.yml  # AMI validation playbook
+│   ├── tasks/                        # Modular task files
+│   │   ├── cis/                      # CIS hardening tasks
+│   │   ├── compliance/               # Compliance check tasks
+│   │   ├── validation/               # Validation test tasks
+│   │   └── common/                   # Common reusable tasks
+│   └── vars/                         # Variable files
+├── config/                           # Configuration files
+│   ├── build-config.yml              # Build and distribution configuration
+│   └── README.md                     # Config documentation
 ├── ubuntu-golden-image.pkr.hcl      # Main Packer template
 └── variables.example.pkrvars.hcl    # Example variables (for reference)
 ```
@@ -674,10 +706,10 @@ packer/
 5. After review and approval, merge to `main`
 6. The workflow will automatically build the new AMI
 
+
 ## Resources
 
 - [Packer Documentation](https://www.packer.io/docs)
-- [HCP Packer Documentation](https://developer.hashicorp.com/packer/docs/hcp)
 - [AWS AMI Documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html)
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
 - [AWS OIDC with GitHub Actions](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services)
@@ -688,8 +720,10 @@ For issues or questions:
 1. Check the [Troubleshooting](#troubleshooting) section
 2. Review GitHub Actions logs for error details
 3. Check AWS CloudWatch logs (if applicable)
-4. Review HCP Packer documentation
+4. Review Packer documentation
 
 ---
 
 **Last Updated**: December 2024
+
+

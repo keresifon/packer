@@ -1,0 +1,104 @@
+---
+# CIS Compliance Check Playbook
+# Validates CIS benchmark compliance and optionally fails build if threshold not met
+# Modular version using task files
+
+- name: CIS Ubuntu 22.04 LTS Compliance Check
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars_files:
+    - vars/cis-defaults.yml
+
+  vars:
+    fail_build_on_non_compliance: false  # Set to true to fail build on non-compliance
+
+  pre_tasks:
+    - name: Convert cis_level to integer (handle string from Packer)
+      set_fact:
+        cis_level: "{{ (cis_level | default(cis_level_default)) | int }}"
+
+    - name: Install compliance checking tools
+      apt:
+        name:
+          - python3-pip
+          - jq
+        state: present
+        update_cache: yes
+
+  tasks:
+    - name: CIS 1.1 Compliance Checks - Filesystem
+      include_tasks: tasks/compliance/1.1-filesystem.yml
+
+    - name: CIS 1.4 Compliance Checks - Boot Settings
+      include_tasks: tasks/compliance/1.4-boot.yml
+
+    - name: CIS 1.5 Compliance Checks - Process Hardening
+      include_tasks: tasks/compliance/1.5-process.yml
+
+    - name: CIS 1.6 Compliance Checks - MAC
+      include_tasks: tasks/compliance/1.6-mac.yml
+
+    - name: CIS 3.1 Compliance Checks - Network
+      include_tasks: tasks/compliance/3.1-network.yml
+
+    - name: CIS 4.1 Compliance Checks - Logging
+      include_tasks: tasks/compliance/4.1-logging.yml
+
+    - name: CIS 5.1 Compliance Checks - Time Sync
+      include_tasks: tasks/compliance/5.1-time-sync.yml
+
+    - name: CIS 5.2 Compliance Checks - SSH (Level 2)
+      include_tasks: tasks/compliance/5.2-ssh.yml
+
+    - name: CIS 6.1 Compliance Checks - File Permissions
+      include_tasks: tasks/compliance/6.1-file-permissions.yml
+
+    - name: CIS 6.2 Compliance Checks - User/Group (Level 2)
+      include_tasks: tasks/compliance/6.2-user-group.yml
+
+    - name: CIS 6.3 Compliance Checks - Maintenance (Level 2)
+      include_tasks: tasks/compliance/6.3-maintenance.yml
+
+    - name: Calculate compliance statistics
+      include_tasks: tasks/compliance/calculate-compliance.yml
+
+    - name: Display compliance report
+      debug:
+        msg:
+          - "=========================================="
+          - "CIS Compliance Report"
+          - "=========================================="
+          - "Passed: {{ compliance_passed }}/{{ compliance_total }}"
+          - "Compliance: {{ compliance_percentage }}%"
+          - "Threshold: {{ cis_compliance_threshold }}%"
+          - "=========================================="
+
+    - name: Display failed checks
+      debug:
+        msg: "Failed checks: {{ compliance_failed_checks | join(', ') }}"
+      when: compliance_failed_checks | length > 0
+
+    - name: Generate compliance report JSON
+      copy:
+        content: |
+          {
+            "compliance_percentage": {{ compliance_percentage }},
+            "compliance_passed": {{ compliance_passed }},
+            "compliance_total": {{ compliance_total }},
+            "cis_level": {{ cis_level | default(cis_level_default) }},
+            "cis_compliance_threshold": {{ cis_compliance_threshold }},
+            "status": "{{ 'PASS' if compliance_percentage | int >= cis_compliance_threshold | int else 'FAIL' }}",
+            "failed_checks": {{ compliance_failed_checks | to_json }},
+            "all_checks": {{ compliance_checks_detailed | to_json }}
+          }
+        dest: /tmp/cis-compliance-report.json
+        mode: '0644'
+
+    - name: Fail build if compliance below threshold
+      fail:
+        msg: "CIS compliance ({{ compliance_percentage }}%) is below threshold ({{ cis_compliance_threshold }}%)"
+      when:
+        - compliance_percentage | int < cis_compliance_threshold | int
+        - fail_build_on_non_compliance | bool
