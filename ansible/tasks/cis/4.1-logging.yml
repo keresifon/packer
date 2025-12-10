@@ -1,0 +1,49 @@
+---
+# CIS 4.1 - Configure Logging
+# Configures system logging
+
+- name: Install rsyslog
+  apt:
+    name: rsyslog
+    state: present
+
+- name: Enable rsyslog service
+  systemd:
+    name: rsyslog
+    enabled: yes
+    state: started
+
+# Level 2: Enhanced logging configuration
+- name: Configure rsyslog to send logs to remote log host (Level 2)
+  blockinfile:
+    path: /etc/rsyslog.conf
+    block: |
+      # Send all logs to remote log host (Level 2)
+      # Uncomment and configure if remote logging is required
+      # *.* @@loghost.example.com
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - CIS Level 2"
+  when: (cis_level | default(cis_level_default) | int) >= 2
+  # Note: Configure actual log host as needed
+
+- name: Ensure rsyslog default file permissions configured (Level 2)
+  lineinfile:
+    path: /etc/rsyslog.conf
+    regexp: '^\$FileCreateMode'
+    line: '$FileCreateMode 0640'
+    insertafter: '^#\$FileCreateMode'
+  when: (cis_level | default(cis_level_default) | int) >= 2
+
+- name: Configure journald to forward to rsyslog (Level 2)
+  lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: '^#?ForwardToSyslog='
+    line: 'ForwardToSyslog=yes'
+  when: (cis_level | default(cis_level_default) | int) >= 2
+
+- name: Configure journald to store logs persistently (Level 2)
+  lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: '^#?Storage='
+    line: 'Storage=persistent'
+  when: (cis_level | default(cis_level_default) | int) >= 2
+

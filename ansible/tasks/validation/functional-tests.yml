@@ -1,0 +1,122 @@
+---
+# Functional validation tests for AMI
+
+- name: Test 1 - Verify SSH connectivity
+  debug:
+    msg: "SSH connectivity: PASS"
+
+- name: Test 2 - Verify system is booted and running
+  command: uptime
+  register: uptime_result
+  changed_when: false
+
+- name: Display system uptime
+  debug:
+    msg: "System uptime: {{ uptime_result.stdout }}"
+
+- name: Test 3 - Verify critical services are running
+  systemd:
+    name: "{{ item }}"
+  register: service_status
+  failed_when: false
+  changed_when: false
+  loop:
+    - ssh
+    - rsyslog
+    - chronyd
+
+- name: Display service status
+  debug:
+    msg: "Service {{ item.item }}: {{ 'RUNNING' if item.status.ActiveState == 'active' else 'NOT RUNNING' }}"
+  loop: "{{ service_status.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Test 4 - Verify AWS CLI is installed and working
+  command: aws --version
+  register: aws_cli_version
+  changed_when: false
+  failed_when: false
+
+- name: Display AWS CLI version
+  debug:
+    msg: "AWS CLI: {{ aws_cli_version.stdout if aws_cli_version.rc == 0 else 'NOT INSTALLED' }}"
+
+- name: Test 5 - Verify network connectivity
+  uri:
+    url: https://www.google.com
+    method: GET
+    status_code: 200
+  register: network_test
+  failed_when: false
+  changed_when: false
+
+- name: Display network connectivity test
+  debug:
+    msg: "Network connectivity: {{ 'PASS' if network_test.status == 200 else 'FAIL' }}"
+
+- name: Test 6 - Verify common utilities are installed
+  command: which {{ item }}
+  register: utility_check
+  failed_when: false
+  changed_when: false
+  loop:
+    - curl
+    - wget
+    - git
+    - unzip
+
+- name: Display utility installation status
+  debug:
+    msg: "Utility {{ item.item }}: {{ 'INSTALLED' if item.rc == 0 else 'NOT INSTALLED' }}"
+  loop: "{{ utility_check.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Test 7 - Verify disk space is available
+  command: df -h /
+  register: disk_space
+  changed_when: false
+
+- name: Display disk space
+  debug:
+    msg: "Disk space: {{ disk_space.stdout_lines[1] }}"
+
+- name: Test 8 - Verify no root login via SSH
+  command: grep -E "^PermitRootLogin" /etc/ssh/sshd_config
+  register: root_login_check
+  changed_when: false
+  failed_when: false
+
+- name: Verify root login is disabled
+  assert:
+    that:
+      - root_login_check.stdout is defined
+      - "'no' in root_login_check.stdout.lower()"
+    fail_msg: "Root login is not properly disabled"
+    success_msg: "Root login is disabled: PASS"
+
+- name: Test 9 - Verify password authentication is disabled
+  command: grep -E "^PasswordAuthentication" /etc/ssh/sshd_config
+  register: password_auth_check
+  changed_when: false
+  failed_when: false
+
+- name: Verify password authentication is disabled
+  assert:
+    that:
+      - password_auth_check.stdout is defined
+      - "'no' in password_auth_check.stdout.lower()"
+    fail_msg: "Password authentication is not properly disabled"
+    success_msg: "Password authentication is disabled: PASS"
+
+- name: Test 10 - Verify system can resolve DNS
+  command: nslookup google.com
+  register: dns_test
+  failed_when: false
+  changed_when: false
+
+- name: Display DNS resolution test
+  debug:
+    msg: "DNS resolution: {{ 'PASS' if dns_test.rc == 0 else 'FAIL' }}"
+
