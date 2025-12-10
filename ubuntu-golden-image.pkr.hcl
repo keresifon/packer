@@ -79,6 +79,26 @@ source "amazon-ebs" "ubuntu" {
   # The subnet must exist in the specified VPC and region
   vpc_id    = var.vpc_id != "" ? var.vpc_id : null
   subnet_id = var.subnet_id != "" ? var.subnet_id : null
+  
+  # Ensure instance gets a public IP for internet access during provisioning
+  # Required for: package downloads, AWS CLI installation, SSH access from Packer
+  associate_public_ip_address = true
+  
+  # SSH configuration for connecting to the instance
+  # When using VPC, Packer needs explicit SSH settings
+  ssh_interface            = "public_ip"  # Use public IP instead of private IP
+  ssh_timeout              = "15m"         # Increase timeout to 15 minutes
+  ssh_handshake_attempts   = 50           # Retry SSH handshake up to 50 times
+  ssh_clear_authorized_keys = false       # Don't clear authorized keys (use default)
+  
+  # Wait longer for instance to be ready before attempting SSH
+  # This gives the instance time to fully boot and start SSH service
+  wait_for_ready_timeout = "10m"          # Wait up to 10 minutes for instance to be ready
+  
+  # Security group configuration
+  # Packer creates a temporary security group, but we need to ensure it allows SSH
+  # If you have a custom security group, you can specify it here
+  # Otherwise, Packer will create one with SSH access from 0.0.0.0/0
 
   # Tags for the AMI
   tags = {
