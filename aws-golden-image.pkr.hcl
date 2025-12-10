@@ -194,6 +194,20 @@ source "amazon-ebs" "amazonlinux2023" {
 
   iam_instance_profile = var.iam_instance_profile != "" ? var.iam_instance_profile : null
 
+  # User data to ensure SSM Agent starts immediately on instance launch
+
+  # This is critical - SSM Agent must be running for Packer to connect via SSM
+
+  user_data = base64encode(<<-EOF
+    #!/bin/bash
+    # Ensure SSM Agent starts immediately on boot
+    systemctl enable amazon-ssm-agent
+    systemctl start amazon-ssm-agent
+    # Wait for SSM Agent to be ready
+    sleep 10
+  EOF
+  )
+
   # VPC configuration (optional - only set if provided)
 
   # Note: If subnet_id is specified, vpc_id must also be specified
@@ -394,9 +408,11 @@ build {
 
  
 
-  # Provisioning: Ensure SSM Agent is running and enabled
+  # Provisioning: Ensure SSM Agent is installed, enabled, and running
 
-  # Amazon Linux 2023 comes with SSM Agent pre-installed, but ensure it's enabled
+  # Amazon Linux 2023 comes with SSM Agent pre-installed, but ensure it's properly configured
+
+  # This must run early in provisioning since Packer uses SSM to connect
 
   provisioner "shell" {
 
@@ -406,13 +422,45 @@ build {
 
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
 
-      "# Ensure SSM Agent is enabled and running",
+      "# Check if SSM Agent is installed",
 
-      "$${SUDO} systemctl enable amazon-ssm-agent",
+      "if ! command -v amazon-ssm-agent >/dev/null 2>&1; then",
 
-      "$${SUDO} systemctl start amazon-ssm-agent",
+      "  echo 'SSM Agent not found, installing...'",
 
-      "$${SUDO} systemctl status amazon-ssm-agent || true"
+      "  $${SUDO} dnf install -y amazon-ssm-agent || echo 'Warning: Failed to install SSM Agent'",
+
+      "fi",
+
+      "# Ensure SSM Agent service exists",
+
+      "if $${SUDO} systemctl list-unit-files | grep -q amazon-ssm-agent.service; then",
+
+      "  echo 'SSM Agent service found'",
+
+      "  # Enable SSM Agent to start on boot",
+
+      "  $${SUDO} systemctl enable amazon-ssm-agent",
+
+      "  # Start SSM Agent immediately",
+
+      "  $${SUDO} systemctl start amazon-ssm-agent",
+
+      "  # Wait a moment for service to start",
+
+      "  sleep 5",
+
+      "  # Check status",
+
+      "  $${SUDO} systemctl status amazon-ssm-agent --no-pager || echo 'Warning: SSM Agent status check failed'",
+
+      "else",
+
+      "  echo 'ERROR: SSM Agent service not found'",
+
+      "  exit 1",
+
+      "fi"
 
     ]
 
