@@ -154,10 +154,6 @@ source "amazon-ebs" "amazonlinux2023" {
 
   iam_instance_profile = var.iam_instance_profile != "" ? var.iam_instance_profile : null
 
-  # SSM timeout settings
-
-  ssm_timeout = "15m"  # Timeout for SSM session establishment
-
   # VPC configuration (optional - only set if provided)
 
   # Note: If subnet_id is specified, vpc_id must also be specified
