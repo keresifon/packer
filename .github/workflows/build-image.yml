@@ -14,7 +14,7 @@ on:
 
         required: false
 
-        default: 'us-east-1'
+        default: 'us-east-2'
 
         type: string
 
@@ -50,7 +50,7 @@ on:
 
 env:
 
-  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-2' }}
 
   PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || github.event.inputs.iam_instance_profile || '' }}
 
@@ -708,15 +708,55 @@ jobs:
 
             echo "✅ Both VPC and Subnet IDs are configured"
 
-            echo "⚠️  Important: Ensure the subnet '$SUBNET_ID' exists in VPC '$VPC_ID' in region '$REGION'"
+            echo "⚠️  Validating subnet exists in specified region and VPC..."
 
-            echo ""
+            # Verify subnet exists and belongs to the VPC
 
-            echo "To verify, run:"
+            SUBNET_VPC_ID=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --region "$REGION" --query 'Subnets[0].VpcId' --output text 2>&1)
 
-            echo "  aws ec2 describe-subnets --subnet-ids $SUBNET_ID --region $REGION --query 'Subnets[0].VpcId'"
+            if [ $? -ne 0 ]; then
 
-            echo "  (Should return: $VPC_ID)"
+              echo "❌ ERROR: Failed to describe subnet '$SUBNET_ID' in region '$REGION'"
+
+              echo "   Error details: $SUBNET_VPC_ID"
+
+              echo ""
+
+              echo "   Possible causes:"
+
+              echo "   1. Subnet does not exist in region '$REGION'"
+
+              echo "   2. Subnet ID is incorrect"
+
+              echo "   3. AWS credentials don't have ec2:DescribeSubnets permission"
+
+              echo ""
+
+              echo "   To list available subnets in the VPC, run:"
+
+              echo "     aws ec2 describe-subnets --filters \"Name=vpc-id,Values=$VPC_ID\" --region $REGION --query 'Subnets[*].[SubnetId,AvailabilityZone]' --output table"
+
+              exit 1
+
+            fi
+
+            if [ "$SUBNET_VPC_ID" != "$VPC_ID" ]; then
+
+              echo "❌ ERROR: Subnet '$SUBNET_ID' belongs to VPC '$SUBNET_VPC_ID', not the specified VPC '$VPC_ID'"
+
+              echo ""
+
+              echo "   Please verify:"
+
+              echo "   1. The subnet ID is correct"
+
+              echo "   2. The VPC ID matches the subnet's VPC"
+
+              exit 1
+
+            fi
+
+            echo "✅ Subnet '$SUBNET_ID' verified in VPC '$VPC_ID' in region '$REGION'"
 
           fi
 

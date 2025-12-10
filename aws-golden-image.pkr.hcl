@@ -28,7 +28,7 @@ variable "aws_region" {
 
   description = "AWS region to build the image in"
 
-  default     = "ca-central-1"
+  default     = "us-east-2"
 
 }
 
