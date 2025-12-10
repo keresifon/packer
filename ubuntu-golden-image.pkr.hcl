@@ -160,45 +160,25 @@ source "amazon-ebs" "amazonlinux2023" {
 
   # IAM instance profile configuration
 
-  # Option 1: Use existing instance profile (if provided)
+  # Required for SSM Session Manager connectivity
+
+  # The instance profile must have the AmazonSSMManagedInstanceCore policy attached
+
+  # Packer can create a temporary instance profile if you provide policy ARNs
+
+  # Option 1: Use existing instance profile (recommended for production)
 
   iam_instance_profile = var.iam_instance_profile != "" ? var.iam_instance_profile : null
 
-  # Option 2: Let Packer create temporary instance profile with required SSM permissions
+  # Option 2: Let Packer create temporary instance profile with managed policy
 
-  # This policy document grants the instance permission to use SSM Session Manager
+  # Reference the AmazonSSMManagedInstanceCore managed policy ARN
 
-  temporary_iam_instance_profile_policy_document = jsonencode({
+  temporary_iam_instance_profile_policy_arns = var.iam_instance_profile == "" ? [
 
-    Version = "2012-10-17"
+    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 
-    Statement = [
-
-      {
-
-        Effect = "Allow"
-
-        Action = [
-
-          "ssm:UpdateInstanceInformation",
-
-          "ssmmessages:CreateControlChannel",
-
-          "ssmmessages:CreateDataChannel",
-
-          "ssmmessages:OpenControlChannel",
-
-          "ssmmessages:OpenDataChannel"
-
-        ]
-
-        Resource = "*"
-
-      }
-
-    ]
-
-  })
+  ] : null
 
   # VPC configuration (optional - only set if provided)
 
