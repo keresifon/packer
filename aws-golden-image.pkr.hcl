@@ -346,11 +346,11 @@ build {
 
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
 
-      "${SUDO} dnf update -y",
+      "$${SUDO} dnf update -y",
 
-      "${SUDO} dnf upgrade -y",
+      "$${SUDO} dnf upgrade -y",
 
-      "${SUDO} dnf clean all"
+      "$${SUDO} dnf clean all"
 
     ]
 
@@ -370,9 +370,9 @@ build {
 
       "# Install common utilities",
 
-      "${SUDO} dnf install -y curl wget git unzip",
+      "$${SUDO} dnf install -y curl wget git unzip",
 
-      "${SUDO} dnf install -y htop net-tools",
+      "$${SUDO} dnf install -y htop net-tools",
 
       "# Install AWS CLI v2 using official installer",
 
@@ -380,13 +380,13 @@ build {
 
       "unzip -q /tmp/awscliv2.zip -d /tmp",
 
-      "${SUDO} /tmp/aws/install",
+      "$${SUDO} /tmp/aws/install",
 
       "rm -rf /tmp/aws /tmp/awscliv2.zip",
 
       "# Install jq",
 
-      "${SUDO} dnf install -y jq || echo 'Warning: jq installation skipped'"
+      "$${SUDO} dnf install -y jq || echo 'Warning: jq installation skipped'"
 
     ]
 
@@ -408,11 +408,11 @@ build {
 
       "# Ensure SSM Agent is enabled and running",
 
-      "${SUDO} systemctl enable amazon-ssm-agent",
+      "$${SUDO} systemctl enable amazon-ssm-agent",
 
-      "${SUDO} systemctl start amazon-ssm-agent",
+      "$${SUDO} systemctl start amazon-ssm-agent",
 
-      "${SUDO} systemctl status amazon-ssm-agent || true"
+      "$${SUDO} systemctl status amazon-ssm-agent || true"
 
     ]
 
@@ -432,13 +432,13 @@ build {
 
       "# Harden SSH configuration",
 
-      "${SUDO} sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config || true",
+      "$${SUDO} sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config || true",
 
-      "${SUDO} sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
+      "$${SUDO} sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
 
-      "${SUDO} sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
+      "$${SUDO} sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
 
-      "${SUDO} systemctl restart sshd || true"
+      "$${SUDO} systemctl restart sshd || true"
 
     ]
 
@@ -458,23 +458,23 @@ build {
 
       "# Clean up cloud-init",
 
-      "${SUDO} cloud-init clean",
+      "$${SUDO} cloud-init clean",
 
-      "${SUDO} rm -f /var/log/cloud-init*.log",
+      "$${SUDO} rm -f /var/log/cloud-init*.log",
 
       "# Clean up temporary files",
 
-      "${SUDO} rm -rf /tmp/*",
+      "$${SUDO} rm -rf /tmp/*",
 
-      "${SUDO} rm -rf /var/tmp/*",
+      "$${SUDO} rm -rf /var/tmp/*",
 
       "# Clean up package cache",
 
-      "${SUDO} dnf clean all",
+      "$${SUDO} dnf clean all",
 
       "# Sync filesystem",
 
-      "${SUDO} sync"
+      "$${SUDO} sync"
 
     ]
 
