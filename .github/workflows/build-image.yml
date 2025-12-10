@@ -144,7 +144,7 @@ jobs:
 
         run: |
 
-          # Check if packages are already installed
+          # Check if packages are already installed.
 
           if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
 
