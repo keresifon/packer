@@ -1,4 +1,4 @@
-name: Build Ubuntu Golden Image
+name: Build Amazon Linux 2023 Golden Image
 
  
 
@@ -8,22 +8,6 @@ on:
 
     inputs:
 
-      ubuntu_version:
-
-        description: 'Ubuntu version to build'
-
-        required: false
-
-        default: '22.04'
-
-        type: choice
-
-        options:
-
-          - '22.04'
-
-          - '20.04'
-
       aws_region:
 
         description: 'AWS region'
@@ -31,6 +15,16 @@ on:
         required: false
 
         default: 'us-east-1'
+
+        type: string
+
+      iam_instance_profile:
+
+        description: 'IAM instance profile name for SSM (optional - Packer can create temporary one)'
+
+        required: false
+
+        default: ''
 
         type: string
 
@@ -58,7 +52,7 @@ env:
 
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
 
-  PKR_VAR_ubuntu_version: ${{ github.event.inputs.ubuntu_version || '22.04' }}
+  PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || github.event.inputs.iam_instance_profile || '' }}
 
   PKR_VAR_vpc_id: ${{ vars.VPC_ID || '' }}
 
@@ -144,7 +138,7 @@ jobs:
 
         run: |
 
-          # Check if packages are already installed.
+          # Check if packages are already installed
 
           if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
 
@@ -172,10 +166,7 @@ jobs:
 
                 echo "Installing jq from GitHub releases..."
 
-                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
-
-
--o /tmp/jq
+                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
 
                 chmod +x /tmp/jq
 
@@ -389,13 +380,13 @@ jobs:
 
       - name: Initialize Packer
 
-        run: packer init ubuntu-golden-image.pkr.hcl
+        run: packer init aws-golden-image.pkr.hcl
 
  
 
       - name: Validate Packer template
 
-        run: packer validate ubuntu-golden-image.pkr.hcl
+        run: packer validate aws-golden-image.pkr.hcl
 
  
 
@@ -453,10 +444,7 @@ jobs:
 
                 echo "Installing jq from GitHub releases..."
 
-                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
-
-
--o /tmp/jq
+                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
 
                 chmod +x /tmp/jq
 
@@ -670,7 +658,7 @@ jobs:
 
       - name: Initialize Packer
 
-        run: packer init ubuntu-golden-image.pkr.hcl
+        run: packer init aws-golden-image.pkr.hcl
 
  
 
@@ -684,6 +672,8 @@ jobs:
 
           REGION="${{ env.PKR_VAR_aws_region }}"
 
+          IAM_PROFILE="${{ env.PKR_VAR_iam_instance_profile }}"
+
           echo "=== VPC and Subnet Configuration ==="
 
           echo "Region: ${REGION}"
@@ -691,6 +681,8 @@ jobs:
           echo "VPC ID: ${VPC_ID:-'Not specified (will use default VPC if available)'}"
 
           echo "Subnet ID: ${SUBNET_ID:-'Not specified (will use default subnet if available)'}"
+
+          echo "IAM Instance Profile: ${IAM_PROFILE:-'Not specified (Packer will create temporary one)'}"
 
           echo ""
 
@@ -728,6 +720,40 @@ jobs:
 
           fi
 
+          echo ""
+
+          echo "=== SSM Session Manager Configuration ==="
+
+          if [ -n "$IAM_PROFILE" ]; then
+
+            echo "✅ Using IAM instance profile: $IAM_PROFILE"
+
+            echo "   Source: GitHub repository variable IAM_INSTANCE_PROFILE or workflow input"
+
+            echo "   Ensure it has AmazonSSMManagedInstanceCore policy attached"
+
+          else
+
+            echo "ℹ️  No IAM instance profile specified"
+
+            echo "   Packer will create a temporary instance profile with SSM permissions"
+
+            echo "   To use a pre-created profile, set GitHub repository variable: IAM_INSTANCE_PROFILE"
+
+            echo "   Required IAM permissions for Packer (if creating temporary profile):"
+
+            echo "   - iam:CreateInstanceProfile"
+
+            echo "   - iam:AddRoleToInstanceProfile"
+
+            echo "   - iam:PassRole"
+
+            echo "   - iam:CreateRole"
+
+            echo "   - iam:AttachRolePolicy"
+
+          fi
+
  
 
       - name: Build Packer image
@@ -736,9 +762,17 @@ jobs:
 
           PACKER_BUILD_CMD="packer build \
 
-            -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\" \
+            -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\""
 
-            -var=\"ubuntu_version=${{ env.PKR_VAR_ubuntu_version }}\""
+          # Add IAM instance profile variable if provided
+
+          if [ -n "${{ env.PKR_VAR_iam_instance_profile }}" ]; then
+
+            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
+
+            echo "Using IAM Instance Profile: ${{ env.PKR_VAR_iam_instance_profile }}"
+
+          fi
 
           # Add VPC and subnet variables if provided
 
@@ -760,7 +794,7 @@ jobs:
 
           fi
 
-          PACKER_BUILD_CMD="${PACKER_BUILD_CMD} ubuntu-golden-image.pkr.hcl"
+          PACKER_BUILD_CMD="${PACKER_BUILD_CMD} aws-golden-image.pkr.hcl"
 
           eval $PACKER_BUILD_CMD
 
@@ -775,4 +809,3 @@ jobs:
           echo "AMI build completed successfully!"
 
           echo "Check AWS EC2 Console for the latest AMI"
-
