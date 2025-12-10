@@ -96,14 +96,9 @@ source "amazon-ebs" "ubuntu" {
   ssh_bastion_private_key_file = null
   
   # Security group configuration
-  # Packer creates a temporary security group, but we need to ensure it allows SSH
-  # The temporary security group should allow SSH from 0.0.0.0/0
+  # Packer creates a temporary security group automatically with SSH access from 0.0.0.0/0
   # If you have issues, you can pre-create a security group and specify it here:
   # security_group_ids = ["sg-xxxxxxxxx"]
-  
-  # Temporary security group ingress rules (Packer will create these)
-  # These ensure SSH access from anywhere (required for GitHub Actions)
-  temporary_security_group_source_cidr = "0.0.0.0/0"
 
   # Tags for the AMI
   tags = {
