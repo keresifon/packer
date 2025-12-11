@@ -81,12 +81,11 @@ jobs:
           CPIO_RPM_FILE=$(ls rpm/cpio-*.rpm 2>/dev/null | head -1)
           echo "Found cpio RPM: $CPIO_RPM_FILE"
           
-          # Extract RPM without rpm2cpio (bootstrap method using Python)
+          # Extract RPM using Python
           echo "Extracting cpio RPM using Python..."
           EXTRACT_DIR=$(mktemp -d)
           
-          # Python script to extract RPM (AR archive format)
-          python3 << 'PYTHON_EOF'
+          python3 - "$CPIO_RPM_FILE" "$EXTRACT_DIR" << 'PYTHON_EOF'
 import sys
 import os
 import gzip
@@ -100,70 +99,7 @@ try:
     with open(rpm_file, 'rb') as f:
         # Read AR archive header
         if f.read(8) != b'!<arch>\n':
-            print("Not an AR archive")
-            sys.exit(1)
-        
-        while True:
-            # Read AR member header (60 bytes)
-            header = f.read(60)
-            if len(header) < 60:
-                break
-            
-            # Skip padding
-            if header[:2] == b'`\n':
-                continue
-            
-            # Parse filename and size
-            name = header[:16].strip().decode('ascii', errors='ignore').rstrip('/')
-            size = int(header[48:58].strip().decode('ascii', errors='ignore'))
-            
-            # Look for data.tar.gz or similar
-            if name.startswith('data.tar'):
-                print(f"Found: {name} (size: {size})")
-                data = f.read(size)
-                
-                # Try different decompression methods
-                for decompress in [gzip.decompress, lambda x: x]:
-                    try:
-                        decompressed = decompress(data)
-                        tar = tarfile.open(fileobj=io.BytesIO(decompressed))
-                        tar.extractall(extract_dir)
-                        print(f"Extracted {len(tar.getmembers())} files")
-                        sys.exit(0)
-                    except:
-                        continue
-            else:
-                # Skip to next member (aligned to 2 bytes)
-                if size % 2:
-                    size += 1
-                f.seek(size, 1)
-    
-    sys.exit(1)
-except Exception as e:
-    print(f"Error: {e}")
-    sys.exit(1)
-PYTHON_EOF
-          
-          if python3 - "$CPIO_RPM_FILE" "$EXTRACT_DIR" << 'PYTHON_EOF'
-import sys
-import os
-import gzip
-import tarfile
-import io
-
-rpm_file = sys.argv[1]
-extract_dir = sys.argv[2]
-
-try:
-    with open(rpm_file, 'rb') as f:
-        # Read AR archive header
-        if f.read(8) != b'!<arch>\n':
-            print("Not an AR archive, trying as RPM...")
-            # Reset and try as RPM
-            f.seek(0)
-            # Skip RPM lead (96 bytes) and signature
-            f.seek(96)
-            # This is complex, just fail for now
+            print("Not an AR archive format")
             sys.exit(1)
         
         while True:
@@ -194,7 +130,7 @@ try:
                         decompressed = decompress(data)
                         tar = tarfile.open(fileobj=io.BytesIO(decompressed))
                         tar.extractall(extract_dir)
-                        print(f"Extracted {len(tar.getmembers())} files")
+                        print(f"✅ Extracted {len(tar.getmembers())} files")
                         sys.exit(0)
                     except:
                         continue
@@ -204,16 +140,16 @@ try:
                     size += 1
                 f.seek(size, 1)
     
+    print("❌ data.tar not found in RPM")
     sys.exit(1)
 except Exception as e:
-    print(f"Error: {e}")
+    print(f"❌ Error: {e}")
     import traceback
     traceback.print_exc()
     sys.exit(1)
 PYTHON_EOF
-          then
-            echo "✅ RPM extracted successfully"
-          else
+          
+          if [ $? -ne 0 ]; then
             echo "⚠️  Python extraction failed, trying alternative method..."
             
             # Alternative: Use ar and tar if available
@@ -225,7 +161,7 @@ PYTHON_EOF
                   tar -xf "$tarfile" 2>/dev/null && break
                 fi
               done
-              cd -
+              cd - >/dev/null
             else
               echo "❌ Cannot extract RPM without ar/tar or working Python"
               exit 1
@@ -408,7 +344,7 @@ PYTHON_EOF
           echo "Extracting cpio RPM..."
           EXTRACT_DIR=$(mktemp -d)
           
-          python3 << PYTHON_EOF "$CPIO_RPM_FILE" "$EXTRACT_DIR"
+          python3 - "$CPIO_RPM_FILE" "$EXTRACT_DIR" << 'PYTHON_EOF'
 import sys
 import os
 import gzip
@@ -421,7 +357,7 @@ extract_dir = sys.argv[2]
 try:
     with open(rpm_file, 'rb') as f:
         # Read AR archive header
-        if f.read(8) != b'!<arch>\\n':
+        if f.read(8) != b'!<arch>\n':
             print("Not an AR archive format")
             sys.exit(1)
         
@@ -430,7 +366,7 @@ try:
             if len(header) < 60:
                 break
             
-            if header[:2] == b'\`\\n':
+            if header[:2] == b'`\n':
                 continue
             
             name = header[:16].strip().decode('ascii', errors='ignore').rstrip('/')
