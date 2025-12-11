@@ -938,7 +938,9 @@ jobs:
 
             # Write to a temporary var file to avoid shell quoting issues
 
-            VAR_FILE=$(mktemp)
+            # Packer requires var files to have .hcl or .json extension
+
+            VAR_FILE=$(mktemp --suffix=.hcl)
 
             echo "security_group_ids = $SG_HCL" > "$VAR_FILE"
 
