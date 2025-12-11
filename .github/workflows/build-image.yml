@@ -39,53 +39,92 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Inspect Runner Environment
+      - name: Setup user bin directory
         run: |
-          echo "=== Runner OS Information ==="
-          uname -a
-          cat /etc/os-release
-          echo ""
-          echo "=== Package Manager ==="
-          which dnf && dnf --version || echo "dnf not found"
-          which yum && yum --version || echo "yum not found"
-          echo ""
-          echo "=== Pre-installed Tools ==="
-          echo "cpio: $(which cpio || echo 'not found') - REQUIRED for Session Manager Plugin"
-          echo "curl: $(which curl || echo 'not found')"
-          echo "wget: $(which wget || echo 'not found')"
-          echo "unzip: $(which unzip || echo 'not found')"
-          echo "jq: $(which jq || echo 'not found')"
+          mkdir -p ~/bin ~/.local/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 
-      - name: Install dependencies
+      - name: Install cpio to user directory (CRITICAL)
         run: |
-          # CRITICAL: Install cpio for Session Manager Plugin RPM extraction
-          echo "=== Installing required packages including cpio ==="
-          dnf install -y jq unzip curl cpio rpm-build tar gzip 2>&1 || {
-            echo "dnf install encountered issues, installing individually..."
-            for pkg in jq unzip curl cpio rpm-build tar gzip; do
-              dnf install -y $pkg 2>&1 || echo "Warning: Failed to install $pkg"
-            done
-            # Install jq manually if needed
-            if ! command -v jq >/dev/null 2>&1; then
-              curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
-              chmod +x /tmp/jq
-              mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
-            fi
-          }
+          echo "=== Installing cpio to ~/bin (no root required) ==="
           
+          # Check if cpio is already available
+          if command -v cpio >/dev/null 2>&1; then
+            echo "✅ cpio is already available: $(cpio --version | head -1)"
+            exit 0
+          fi
+          
+          # Download and compile cpio from source (no root needed)
+          CPIO_VERSION="2.14"
+          CPIO_URL="https://ftp.gnu.org/gnu/cpio/cpio-${CPIO_VERSION}.tar.gz"
+          
+          echo "Downloading cpio source..."
+          cd /tmp
+          curl -fsSL "$CPIO_URL" -o cpio.tar.gz
+          tar -xzf cpio.tar.gz
+          cd cpio-${CPIO_VERSION}
+          
+          echo "Compiling cpio (this may take a minute)..."
+          ./configure --prefix="$HOME/.local" 2>&1 | tail -5
+          make -j$(nproc) 2>&1 | tail -5
+          make install 2>&1 | tail -5
+          
+          # Verify installation
+          if [ -x "$HOME/.local/bin/cpio" ]; then
+            echo "✅ cpio installed successfully to ~/.local/bin"
+            "$HOME/.local/bin/cpio" --version | head -1
+            ln -sf "$HOME/.local/bin/cpio" "$HOME/bin/cpio" 2>/dev/null || true
+          else
+            echo "❌ Failed to install cpio"
+            exit 1
+          fi
+          
+          # Cleanup
+          cd /tmp
+          rm -rf cpio-${CPIO_VERSION} cpio.tar.gz
+
+      - name: Install other dependencies to user directory
+        run: |
+          echo "=== Installing dependencies to user directory ==="
+          
+          # Install jq if not available
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "Installing jq..."
+            curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o ~/bin/jq
+            chmod +x ~/bin/jq
+          fi
+          
+          # Verify critical tools
           echo ""
           echo "=== Verification ==="
-          command -v cpio && echo "✅ cpio: $(cpio --version | head -1)" || { echo "❌ cpio: MISSING - Session Manager Plugin will FAIL"; exit 1; }
-          command -v jq && echo "✅ jq: $(jq --version)" || echo "⚠️ jq: not available"
-          command -v unzip && echo "✅ unzip: available" || echo "⚠️ unzip: not available"
+          command -v cpio && echo "✅ cpio: $(cpio --version | head -1)" || echo "❌ cpio: MISSING"
+          command -v jq && echo "✅ jq: $(jq --version)" || echo "❌ jq: MISSING"
+          command -v curl && echo "✅ curl: available" || echo "❌ curl: MISSING"
+          command -v unzip && echo "✅ unzip: available" || echo "❌ unzip: MISSING"
+          command -v tar && echo "✅ tar: available" || echo "❌ tar: MISSING"
+          command -v rpm2cpio && echo "✅ rpm2cpio: available" || echo "❌ rpm2cpio: MISSING"
 
       - name: Setup Packer
         run: |
           PACKER_VERSION="1.10.0"
-          curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
-          unzip -q packer.zip
-          mv packer /usr/local/bin/
-          rm packer.zip
+          
+          # Check if Packer is already installed
+          if command -v packer >/dev/null 2>&1; then
+            INSTALLED_VERSION=$(packer version | head -1 | awk '{print $2}' | sed 's/v//')
+            if [ "$INSTALLED_VERSION" == "$PACKER_VERSION" ]; then
+              echo "✅ Packer ${PACKER_VERSION} is already installed"
+              packer version
+              exit 0
+            fi
+          fi
+          
+          echo "Installing Packer ${PACKER_VERSION} to ~/bin..."
+          curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o /tmp/packer.zip
+          unzip -q /tmp/packer.zip -d ~/bin/
+          chmod +x ~/bin/packer
+          rm /tmp/packer.zip
           packer version
 
       - name: Clear AWS credential caches
@@ -117,13 +156,6 @@ jobs:
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           echo "✅ AWS credentials configured"
-
-      - name: Verify credentials
-        run: |
-          echo "=== Verifying credentials ==="
-          [ -n "$AWS_ACCESS_KEY_ID" ] && echo "✅ AWS_ACCESS_KEY_ID is set" || echo "❌ AWS_ACCESS_KEY_ID is NOT set"
-          [ -n "$AWS_SECRET_ACCESS_KEY" ] && echo "✅ AWS_SECRET_ACCESS_KEY is set" || echo "❌ AWS_SECRET_ACCESS_KEY is NOT set"
-          [ -n "$AWS_SESSION_TOKEN" ] && echo "✅ AWS_SESSION_TOKEN is set" || echo "ℹ️  No session token (long-term creds)"
 
       - name: Initialize Packer
         run: packer init aws-golden-image.pkr.hcl
@@ -142,36 +174,92 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Setup user bin directory
         run: |
-          # CRITICAL: Install cpio for Session Manager Plugin RPM extraction
-          echo "=== Installing required packages including cpio ==="
-          dnf install -y jq unzip curl cpio rpm-build tar gzip 2>&1 || {
-            echo "dnf install encountered issues, installing individually..."
-            for pkg in jq unzip curl cpio rpm-build tar gzip; do
-              dnf install -y $pkg 2>&1 || echo "Warning: Failed to install $pkg"
-            done
-            # Install jq manually if needed
-            if ! command -v jq >/dev/null 2>&1; then
-              curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
-              chmod +x /tmp/jq
-              mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
-            fi
-          }
+          mkdir -p ~/bin ~/.local/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
+
+      - name: Install cpio to user directory (CRITICAL)
+        run: |
+          echo "=== Installing cpio to ~/bin (no root required) ==="
           
+          # Check if cpio is already available
+          if command -v cpio >/dev/null 2>&1; then
+            echo "✅ cpio is already available: $(cpio --version | head -1)"
+            exit 0
+          fi
+          
+          # Download and compile cpio from source (no root needed)
+          CPIO_VERSION="2.14"
+          CPIO_URL="https://ftp.gnu.org/gnu/cpio/cpio-${CPIO_VERSION}.tar.gz"
+          
+          echo "Downloading cpio source..."
+          cd /tmp
+          curl -fsSL "$CPIO_URL" -o cpio.tar.gz
+          tar -xzf cpio.tar.gz
+          cd cpio-${CPIO_VERSION}
+          
+          echo "Compiling cpio (this may take a minute)..."
+          ./configure --prefix="$HOME/.local" 2>&1 | tail -5
+          make -j$(nproc) 2>&1 | tail -5
+          make install 2>&1 | tail -5
+          
+          # Verify installation
+          if [ -x "$HOME/.local/bin/cpio" ]; then
+            echo "✅ cpio installed successfully to ~/.local/bin"
+            "$HOME/.local/bin/cpio" --version | head -1
+            ln -sf "$HOME/.local/bin/cpio" "$HOME/bin/cpio" 2>/dev/null || true
+          else
+            echo "❌ Failed to install cpio"
+            exit 1
+          fi
+          
+          # Cleanup
+          cd /tmp
+          rm -rf cpio-${CPIO_VERSION} cpio.tar.gz
+
+      - name: Install other dependencies to user directory
+        run: |
+          echo "=== Installing dependencies to user directory ==="
+          
+          # Install jq if not available
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "Installing jq..."
+            curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o ~/bin/jq
+            chmod +x ~/bin/jq
+          fi
+          
+          # Verify critical tools
           echo ""
           echo "=== Verification ==="
-          command -v cpio && echo "✅ cpio: $(cpio --version | head -1)" || { echo "❌ cpio: MISSING - Session Manager Plugin will FAIL"; exit 1; }
-          command -v jq && echo "✅ jq: $(jq --version)" || echo "⚠️ jq: not available"
-          command -v unzip && echo "✅ unzip: available" || echo "⚠️ unzip: not available"
+          command -v cpio && echo "✅ cpio: $(cpio --version | head -1)" || echo "❌ cpio: MISSING"
+          command -v jq && echo "✅ jq: $(jq --version)" || echo "❌ jq: MISSING"
+          command -v curl && echo "✅ curl: available" || echo "❌ curl: MISSING"
+          command -v unzip && echo "✅ unzip: available" || echo "❌ unzip: MISSING"
+          command -v tar && echo "✅ tar: available" || echo "❌ tar: MISSING"
+          command -v rpm2cpio && echo "✅ rpm2cpio: available" || echo "❌ rpm2cpio: MISSING"
 
       - name: Setup Packer
         run: |
           PACKER_VERSION="1.10.0"
-          curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
-          unzip -q packer.zip
-          mv packer /usr/local/bin/
-          rm packer.zip
+          
+          # Check if Packer is already installed
+          if command -v packer >/dev/null 2>&1; then
+            INSTALLED_VERSION=$(packer version | head -1 | awk '{print $2}' | sed 's/v//')
+            if [ "$INSTALLED_VERSION" == "$PACKER_VERSION" ]; then
+              echo "✅ Packer ${PACKER_VERSION} is already installed"
+              packer version
+              exit 0
+            fi
+          fi
+          
+          echo "Installing Packer ${PACKER_VERSION} to ~/bin..."
+          curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o /tmp/packer.zip
+          unzip -q /tmp/packer.zip -d ~/bin/
+          chmod +x ~/bin/packer
+          rm /tmp/packer.zip
           packer version
 
       - name: Clear AWS credential caches
@@ -204,75 +292,70 @@ jobs:
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           echo "✅ AWS credentials configured"
 
-      - name: Verify credentials
-        run: |
-          echo "=== Verifying credentials ==="
-          [ -n "$AWS_ACCESS_KEY_ID" ] && echo "✅ AWS_ACCESS_KEY_ID is set" || echo "❌ AWS_ACCESS_KEY_ID is NOT set"
-          [ -n "$AWS_SECRET_ACCESS_KEY" ] && echo "✅ AWS_SECRET_ACCESS_KEY is set" || echo "❌ AWS_SECRET_ACCESS_KEY is NOT set"
-          [ -n "$AWS_SESSION_TOKEN" ] && echo "✅ AWS_SESSION_TOKEN is set" || echo "ℹ️  No session token (long-term creds)"
-
       - name: Install AWS Session Manager Plugin
         run: |
-          echo "=== Installing AWS Session Manager Plugin ==="
+          echo "=== Installing AWS Session Manager Plugin to ~/bin ==="
+          
+          # Check if already installed
           if command -v session-manager-plugin >/dev/null 2>&1; then
             echo "✅ Session Manager Plugin is already installed:"
             session-manager-plugin --version
             exit 0
           fi
           
-          echo "Installing Session Manager Plugin..."
+          echo "Downloading Session Manager Plugin..."
           LOCAL_RPM="rpm/session-manager-plugin.rpm"
           RPM_FILE="/tmp/session-manager-plugin.rpm"
           
-          # Use local RPM if available, otherwise download
+          # Use local RPM if available
           if [ -f "$LOCAL_RPM" ]; then
-            echo "✅ Found local RPM file: $LOCAL_RPM"
+            echo "✅ Found local RPM file"
             cp "$LOCAL_RPM" "$RPM_FILE"
           else
-            echo "Downloading from AWS..."
             PLUGIN_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
-            curl -fsSL "$PLUGIN_URL" -o "$RPM_FILE" || {
-              echo "❌ Failed to download Session Manager Plugin"
-              exit 1
-            }
+            curl -fsSL "$PLUGIN_URL" -o "$RPM_FILE"
           fi
           
-          # Verify cpio is available (CRITICAL)
+          # Verify cpio is available
           if ! command -v cpio >/dev/null 2>&1; then
-            echo "❌ CRITICAL: cpio is not installed"
-            echo "Cannot extract RPM without cpio"
-            echo "Run: dnf install -y cpio"
+            echo "❌ CRITICAL: cpio not found in PATH"
+            echo "PATH: $PATH"
+            ls -la ~/bin/ ~/.local/bin/ 2>/dev/null || true
             exit 1
           fi
           
-          # Extract RPM using rpm2cpio + cpio (the standard method)
-          echo "Extracting RPM package..."
+          echo "✅ cpio is available: $(which cpio)"
+          
+          # Extract RPM to temporary directory
+          echo "Extracting RPM using rpm2cpio + cpio..."
           EXTRACT_DIR=$(mktemp -d)
           cd "$EXTRACT_DIR"
           
-          if rpm2cpio "$RPM_FILE" | cpio -idmv 2>&1 | grep -q "blocks"; then
-            echo "✅ Extraction successful"
-          else
-            echo "❌ Extraction failed"
-            exit 1
-          fi
+          rpm2cpio "$RPM_FILE" | cpio -idmv 2>&1 | head -20
           
-          # Find and install the binary
+          # Find the binary
           BINARY_PATH=$(find "$EXTRACT_DIR" -name "session-manager-plugin" -type f | head -1)
+          
           if [ -z "$BINARY_PATH" ]; then
             echo "❌ Binary not found after extraction"
+            echo "Extract directory contents:"
+            find "$EXTRACT_DIR" -type f | head -20
             exit 1
           fi
           
-          echo "Found binary at: $BINARY_PATH"
-          mkdir -p ~/bin
-          cp "$BINARY_PATH" ~/bin/
-          chmod +x ~/bin/session-manager-plugin
-          echo "$HOME/bin" >> $GITHUB_PATH
+          echo "Found binary: $BINARY_PATH"
           
-          # Verify installation
-          ~/bin/session-manager-plugin --version
-          echo "✅ Session Manager Plugin installed successfully"
+          # Copy to ~/bin
+          cp "$BINARY_PATH" ~/bin/session-manager-plugin
+          chmod +x ~/bin/session-manager-plugin
+          
+          # Verify
+          if ~/bin/session-manager-plugin --version; then
+            echo "✅ Session Manager Plugin installed successfully"
+          else
+            echo "❌ Installation verification failed"
+            exit 1
+          fi
           
           # Cleanup
           rm -rf "$EXTRACT_DIR" "$RPM_FILE"
