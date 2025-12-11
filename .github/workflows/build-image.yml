@@ -1,1599 +1,314 @@
 name: Build Amazon Linux 2023 Golden Image
 
- 
-
 on:
-
   workflow_dispatch:
-
     inputs:
-
       aws_region:
-
         description: 'AWS region'
-
         required: false
-
         default: 'us-east-1'
-
         type: string
-
       iam_instance_profile:
-
         description: 'IAM instance profile name for SSM (optional - Packer can create temporary one)'
-
         required: false
-
         default: ''
-
         type: string
-
   push:
-
     branches:
-
       - main
-
     paths:
-
       - '*.pkr.hcl'
-
       - '.github/workflows/**'
-
   pull_request:
-
     branches:
-
       - main
-
- 
 
 env:
-
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
-
   PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || github.event.inputs.iam_instance_profile || '' }}
-
   PKR_VAR_vpc_id: ${{ vars.VPC_ID || '' }}
-
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
 
-  # PKR_VAR_security_group_ids is set conditionally in steps to avoid Packer parsing errors
-
- 
-
 jobs:
-
   validate:
-
     name: Validate Packer Template
-
     runs-on: terraform
-
     permissions:
-
       contents: read
-
     steps:
-
       - name: Checkout code
-
         uses: actions/checkout@v4
-
- 
 
       - name: Inspect Runner Environment
-
         run: |
-
           echo "=== Runner OS Information ==="
-
           uname -a
-
           cat /etc/os-release
-
           echo ""
-
-          echo "=== Package Manager. ==="
-
+          echo "=== Package Manager ==="
           which dnf && dnf --version || echo "dnf not found"
-
           which yum && yum --version || echo "yum not found"
-
           echo ""
-
-          echo "=== Available Shells ==="
-
-          cat /etc/shells
-
-          echo ""
-
           echo "=== Pre-installed Tools ==="
-
+          echo "cpio: $(which cpio || echo 'not found') - REQUIRED for Session Manager Plugin"
           echo "curl: $(which curl || echo 'not found')"
-
           echo "wget: $(which wget || echo 'not found')"
-
           echo "unzip: $(which unzip || echo 'not found')"
-
           echo "jq: $(which jq || echo 'not found')"
 
-          echo "aws: $(which aws || echo 'not found')"
-
-          echo "git: $(which git || echo 'not found')"
-
-          echo ""
-
-          echo "=== Environment Variables ==="
-
-          env | grep -E '^(PATH|HOME|USER|SHELL|RUNNER)' | sort
-
-          echo ""
-
-          echo "=== PATH ==="
-
-          echo $PATH
-
- 
-
       - name: Install dependencies
-
         run: |
-
-          # Check if packages are already installed
-
-          if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
-
-            echo "All required packages (jq, unzip, curl) are already installed"
-
-            jq --version
-
-            unzip -v | head -1
-
-            curl --version | head -1
-
-          else
-
-            echo "Some packages missing, attempting installation..."
-
-            # Try to install missing packages, but don't fail if dnf has issues
-
-            dnf install -y jq unzip curl 2>&1 || {
-
-              echo "dnf install encountered issues, checking what's available..."
-
-              # Install jq manually if needed and dnf failed
-
-              if ! command -v jq >/dev/null 2>&1; then
-
-                echo "Installing jq from GitHub releases..."
-
-                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
-
-                chmod +x /tmp/jq
-
-                mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
-
-              fi
-
-            }
-
-            # Verify what we have
-
-            echo "Final status:"
-
-            command -v jq && jq --version || echo "jq: not available"
-
-            command -v unzip && unzip -v | head -1 || echo "unzip: not available"
-
-            command -v curl && curl --version | head -1 || echo "curl: not available"
-
-          fi
-
- 
+          # CRITICAL: Install cpio for Session Manager Plugin RPM extraction
+          echo "=== Installing required packages including cpio ==="
+          dnf install -y jq unzip curl cpio rpm-build tar gzip 2>&1 || {
+            echo "dnf install encountered issues, installing individually..."
+            for pkg in jq unzip curl cpio rpm-build tar gzip; do
+              dnf install -y $pkg 2>&1 || echo "Warning: Failed to install $pkg"
+            done
+            # Install jq manually if needed
+            if ! command -v jq >/dev/null 2>&1; then
+              curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
+              chmod +x /tmp/jq
+              mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+            fi
+          }
+          
+          echo ""
+          echo "=== Verification ==="
+          command -v cpio && echo "✅ cpio: $(cpio --version | head -1)" || { echo "❌ cpio: MISSING - Session Manager Plugin will FAIL"; exit 1; }
+          command -v jq && echo "✅ jq: $(jq --version)" || echo "⚠️ jq: not available"
+          command -v unzip && echo "✅ unzip: available" || echo "⚠️ unzip: not available"
 
       - name: Setup Packer
-
         run: |
-
           PACKER_VERSION="1.10.0"
-
-          # Download and install Packer
-
           curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
-
           unzip -q packer.zip
-
           mv packer /usr/local/bin/
-
           rm packer.zip
-
           packer version
 
- 
-
       - name: Clear AWS credential caches
-
         run: |
-
-          echo "=== Clearing potential AWS credential caches ==="
-
-          # Clear AWS CLI cache (if AWS CLI is installed)
-
-          rm -rf ~/.aws/cli/cache 2>/dev/null || true
-
-          rm -rf ~/.aws/sso/cache 2>/dev/null || true
-
-          rm -rf ~/.aws/credentials 2>/dev/null || true
-
-          rm -rf ~/.aws/config 2>/dev/null || true
-
-          # Unset any existing AWS environment variables to ensure fresh credentials
-
+          echo "=== Clearing AWS credential caches ==="
+          rm -rf ~/.aws/cli/cache ~/.aws/sso/cache ~/.aws/credentials ~/.aws/config 2>/dev/null || true
           unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_DEFAULT_REGION AWS_REGION || true
-
           echo "✅ Caches cleared"
 
- 
-
       - name: Configure AWS Credentials
-
         run: |
-
-          # Verify secrets are configured (before setting to GITHUB_ENV)
-
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
-
-            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured in GitHub Secrets."
-
-            echo "Please go to Settings > Secrets and variables > Actions and add AWS_ACCESS_KEY_ID"
-
+            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured"
             exit 1
-
           fi
-
           if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
-
-            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured in GitHub Secrets."
-
-            echo "Please go to Settings > Secrets and variables > Actions and add AWS_SECRET_ACCESS_KEY"
-
+            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured"
             exit 1
-
           fi
-
-          # Trim whitespace and set AWS credentials as environment variables for subsequent steps
-
           ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
-
           SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
-
           SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
-
           echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
-
           echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
-
-          # AWS SSO and temporary credentials require AWS_SESSION_TOKEN
-
           if [ -n "${{ secrets.AWS_SESSION_TOKEN }}" ] && [ -n "${SESSION_TOKEN}" ]; then
-
             echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
-
-            echo "✅ AWS SSO/temporary credentials detected (with session token)"
-
-          else
-
-            echo "ℹ️  No AWS_SESSION_TOKEN provided - using long-term credentials"
-
+            echo "✅ AWS SSO/temporary credentials detected"
           fi
-
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          echo "✅ AWS credentials configured"
 
-          # Basic format validation (without exposing values)
-
-          ACCESS_KEY_LEN=${#ACCESS_KEY}
-
-          SECRET_KEY_LEN=${#SECRET_KEY}
-
-          if [ $ACCESS_KEY_LEN -lt 16 ] || [ $ACCESS_KEY_LEN -gt 128 ]; then
-
-            echo "WARNING: AWS_ACCESS_KEY_ID length is ${ACCESS_KEY_LEN} characters (expected 16-128)"
-
-            echo "This may indicate an invalid or incorrectly formatted access key"
-
-          fi
-
-          if [ $SECRET_KEY_LEN -lt 40 ]; then
-
-            echo "WARNING: AWS_SECRET_ACCESS_KEY length is ${SECRET_KEY_LEN} characters (expected 40+)"
-
-            echo "This may indicate an invalid or incorrectly formatted secret key"
-
-          fi
-
-          echo "✅ AWS credentials configured successfully"
-
-          echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
-
-          echo "Note: Credentials will be validated by Packer during execution"
-
-          echo ""
-
-          echo "If you see 'InvalidClientTokenId' errors, please verify:"
-
-          echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
-
-          echo "2. For AWS SSO: AWS_SESSION_TOKEN secret is also set (required for SSO credentials)"
-
-          echo "3. Credentials are active and not expired (SSO tokens expire after ~1 hour)"
-
-          echo "4. IAM user/role has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
-
-          echo "5. No extra whitespace or newlines in the secret values"
-
- 
-
-      - name: Verify credentials are set correctly
-
+      - name: Verify credentials
         run: |
-
-          echo "=== Verifying credentials are set ==="
-
-          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-
-            echo "✅ AWS_ACCESS_KEY_ID is set (length: ${#AWS_ACCESS_KEY_ID} chars)"
-
-            echo "   Preview: ${AWS_ACCESS_KEY_ID:0:4}...${AWS_ACCESS_KEY_ID: -4}"
-
-          else
-
-            echo "❌ AWS_ACCESS_KEY_ID is NOT set"
-
-          fi
-
-          if [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
-
-            echo "✅ AWS_SECRET_ACCESS_KEY is set (length: ${#AWS_SECRET_ACCESS_KEY} chars)"
-
-          else
-
-            echo "❌ AWS_SECRET_ACCESS_KEY is NOT set"
-
-          fi
-
-          if [ -n "$AWS_SESSION_TOKEN" ]; then
-
-            echo "✅ AWS_SESSION_TOKEN is set (length: ${#AWS_SESSION_TOKEN} chars)"
-
-            echo "   Token preview: ${AWS_SESSION_TOKEN:0:20}...${AWS_SESSION_TOKEN: -10}"
-
-          else
-
-            echo "ℹ️  AWS_SESSION_TOKEN is NOT set (using long-term credentials)"
-
-          fi
-
-          echo "Region: ${AWS_DEFAULT_REGION:-'not set'}"
-
- 
+          echo "=== Verifying credentials ==="
+          [ -n "$AWS_ACCESS_KEY_ID" ] && echo "✅ AWS_ACCESS_KEY_ID is set" || echo "❌ AWS_ACCESS_KEY_ID is NOT set"
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] && echo "✅ AWS_SECRET_ACCESS_KEY is set" || echo "❌ AWS_SECRET_ACCESS_KEY is NOT set"
+          [ -n "$AWS_SESSION_TOKEN" ] && echo "✅ AWS_SESSION_TOKEN is set" || echo "ℹ️  No session token (long-term creds)"
 
       - name: Initialize Packer
-
         run: packer init aws-golden-image.pkr.hcl
-
- 
 
       - name: Validate Packer template
-
         run: packer validate aws-golden-image.pkr.hcl
 
- 
-
   build:
-
     name: Build AMI
-
     needs: validate
-
     runs-on: terraform
-
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-
     permissions:
-
       contents: read
-
     steps:
-
       - name: Checkout code
-
         uses: actions/checkout@v4
 
- 
-
       - name: Install dependencies
-
         run: |
-
-          # Check if packages are already installed
-
-          if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
-
-            echo "All required packages (jq, unzip, curl) are already installed"
-
-            jq --version
-
-            unzip -v | head -1
-
-            curl --version | head -1
-
-          else
-
-            echo "Some packages missing, attempting installation..."
-
-            # Try to install missing packages, but don't fail if dnf has issues
-
-            dnf install -y jq unzip curl 2>&1 || {
-
-              echo "dnf install encountered issues, checking what's available..."
-
-              # Install jq manually if needed and dnf failed
-
-              if ! command -v jq >/dev/null 2>&1; then
-
-                echo "Installing jq from GitHub releases..."
-
-                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
-
-                chmod +x /tmp/jq
-
-                mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
-
-              fi
-
-            }
-
-            # Verify what we have
-
-            echo "Final status:"
-
-            command -v jq && jq --version || echo "jq: not available"
-
-            command -v unzip && unzip -v | head -1 || echo "unzip: not available"
-
-            command -v curl && curl --version | head -1 || echo "curl: not available"
-
-          fi
-
- 
+          # CRITICAL: Install cpio for Session Manager Plugin RPM extraction
+          echo "=== Installing required packages including cpio ==="
+          dnf install -y jq unzip curl cpio rpm-build tar gzip 2>&1 || {
+            echo "dnf install encountered issues, installing individually..."
+            for pkg in jq unzip curl cpio rpm-build tar gzip; do
+              dnf install -y $pkg 2>&1 || echo "Warning: Failed to install $pkg"
+            done
+            # Install jq manually if needed
+            if ! command -v jq >/dev/null 2>&1; then
+              curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
+              chmod +x /tmp/jq
+              mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
+            fi
+          }
+          
+          echo ""
+          echo "=== Verification ==="
+          command -v cpio && echo "✅ cpio: $(cpio --version | head -1)" || { echo "❌ cpio: MISSING - Session Manager Plugin will FAIL"; exit 1; }
+          command -v jq && echo "✅ jq: $(jq --version)" || echo "⚠️ jq: not available"
+          command -v unzip && echo "✅ unzip: available" || echo "⚠️ unzip: not available"
 
       - name: Setup Packer
-
         run: |
-
           PACKER_VERSION="1.10.0"
-
-          # Download and install Packer
-
           curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
-
           unzip -q packer.zip
-
           mv packer /usr/local/bin/
-
           rm packer.zip
-
           packer version
 
- 
-
       - name: Clear AWS credential caches
-
         run: |
-
-          echo "=== Clearing potential AWS credential caches ==="
-
-          # Clear AWS CLI cache (if AWS CLI is installed)
-
-          rm -rf ~/.aws/cli/cache 2>/dev/null || true
-
-          rm -rf ~/.aws/sso/cache 2>/dev/null || true
-
-          rm -rf ~/.aws/credentials 2>/dev/null || true
-
-          rm -rf ~/.aws/config 2>/dev/null || true
-
-          # Unset any existing AWS environment variables to ensure fresh credentials
-
+          echo "=== Clearing AWS credential caches ==="
+          rm -rf ~/.aws/cli/cache ~/.aws/sso/cache ~/.aws/credentials ~/.aws/config 2>/dev/null || true
           unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_DEFAULT_REGION AWS_REGION || true
-
           echo "✅ Caches cleared"
 
- 
-
       - name: Configure AWS Credentials
-
         run: |
-
-          # Verify secrets are configured (before setting to GITHUB_ENV)
-
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
-
-            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured in GitHub Secrets."
-
-            echo "Please go to Settings > Secrets and variables > Actions and add AWS_ACCESS_KEY_ID"
-
+            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured"
             exit 1
-
           fi
-
           if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
-
-            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured in GitHub Secrets."
-
-            echo "Please go to Settings > Secrets and variables > Actions and add AWS_SECRET_ACCESS_KEY"
-
+            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured"
             exit 1
-
           fi
-
-          # Trim whitespace and set AWS credentials as environment variables for subsequent steps
-
           ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
-
           SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
-
           SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
-
           echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
-
           echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
-
-          # AWS SSO and temporary credentials require AWS_SESSION_TOKEN
-
           if [ -n "${{ secrets.AWS_SESSION_TOKEN }}" ] && [ -n "${SESSION_TOKEN}" ]; then
-
             echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
-
-            echo "✅ AWS SSO/temporary credentials detected (with session token)"
-
-          else
-
-            echo "ℹ️  No AWS_SESSION_TOKEN provided - using long-term credentials"
-
+            echo "✅ AWS SSO/temporary credentials detected"
           fi
-
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          echo "✅ AWS credentials configured"
 
-          # Basic format validation (without exposing values)
-
-          ACCESS_KEY_LEN=${#ACCESS_KEY}
-
-          SECRET_KEY_LEN=${#SECRET_KEY}
-
-          if [ $ACCESS_KEY_LEN -lt 16 ] || [ $ACCESS_KEY_LEN -gt 128 ]; then
-
-            echo "WARNING: AWS_ACCESS_KEY_ID length is ${ACCESS_KEY_LEN} characters (expected 16-128)"
-
-            echo "This may indicate an invalid or incorrectly formatted access key"
-
-          fi
-
-          if [ $SECRET_KEY_LEN -lt 40 ]; then
-
-            echo "WARNING: AWS_SECRET_ACCESS_KEY length is ${SECRET_KEY_LEN} characters (expected 40+)"
-
-            echo "This may indicate an invalid or incorrectly formatted secret key"
-
-          fi
-
-          echo "✅ AWS credentials configured successfully"
-
-          echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
-
-          echo "Note: Credentials will be validated by Packer during execution"
-
-          echo ""
-
-          echo "If you see 'InvalidClientTokenId' errors, please verify:"
-
-          echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
-
-          echo "2. For AWS SSO: AWS_SESSION_TOKEN secret is also set (required for SSO credentials)"
-
-          echo "3. Credentials are active and not expired (SSO tokens expire after ~1 hour)"
-
-          echo "4. IAM user/role has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
-
-          echo "5. No extra whitespace or newlines in the secret values"
-
- 
-
-      - name: Verify credentials are set correctly
-
+      - name: Verify credentials
         run: |
-
-          echo "=== Verifying credentials are set ==="
-
-          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-
-            echo "✅ AWS_ACCESS_KEY_ID is set (length: ${#AWS_ACCESS_KEY_ID} chars)"
-
-            echo "   Preview: ${AWS_ACCESS_KEY_ID:0:4}...${AWS_ACCESS_KEY_ID: -4}"
-
-          else
-
-            echo "❌ AWS_ACCESS_KEY_ID is NOT set"
-
-          fi
-
-          if [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
-
-            echo "✅ AWS_SECRET_ACCESS_KEY is set (length: ${#AWS_SECRET_ACCESS_KEY} chars)"
-
-          else
-
-            echo "❌ AWS_SECRET_ACCESS_KEY is NOT set"
-
-          fi
-
-          if [ -n "$AWS_SESSION_TOKEN" ]; then
-
-            echo "✅ AWS_SESSION_TOKEN is set (length: ${#AWS_SESSION_TOKEN} chars)"
-
-            echo "   Token preview: ${AWS_SESSION_TOKEN:0:20}...${AWS_SESSION_TOKEN: -10}"
-
-          else
-
-            echo "ℹ️  AWS_SESSION_TOKEN is NOT set (using long-term credentials)"
-
-          fi
-
-          echo "Region: ${AWS_DEFAULT_REGION:-'not set'}"
-
- 
+          echo "=== Verifying credentials ==="
+          [ -n "$AWS_ACCESS_KEY_ID" ] && echo "✅ AWS_ACCESS_KEY_ID is set" || echo "❌ AWS_ACCESS_KEY_ID is NOT set"
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] && echo "✅ AWS_SECRET_ACCESS_KEY is set" || echo "❌ AWS_SECRET_ACCESS_KEY is NOT set"
+          [ -n "$AWS_SESSION_TOKEN" ] && echo "✅ AWS_SESSION_TOKEN is set" || echo "ℹ️  No session token (long-term creds)"
 
       - name: Install AWS Session Manager Plugin
-
         run: |
-
           echo "=== Installing AWS Session Manager Plugin ==="
-
-          # Check if session-manager-plugin is already installed
-
           if command -v session-manager-plugin >/dev/null 2>&1; then
-
-            echo "Session Manager Plugin is already installed:"
-
+            echo "✅ Session Manager Plugin is already installed:"
             session-manager-plugin --version
-
-          else
-
-            echo "Installing Session Manager Plugin..."
-
-            # Check if RPM file exists locally in the repository
-
-            LOCAL_RPM="rpm/session-manager-plugin.rpm"
-
-            RPM_FILE="/tmp/session-manager-plugin.rpm"
-
-            if [ -f "$LOCAL_RPM" ]; then
-
-              echo "✅ Found local RPM file: $LOCAL_RPM"
-
-              cp "$LOCAL_RPM" "$RPM_FILE"
-
-              DOWNLOAD_SUCCESS=true
-
-            else
-
-              echo "ℹ️  Local RPM file not found, downloading from AWS..."
-
-              # Download Session Manager Plugin for Linux with retry logic and fallback methods
-
-              PLUGIN_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
-
-              MAX_RETRIES=5
-
-              RETRY_DELAY=5
-
-              DOWNLOAD_SUCCESS=false
-
-              # Function to download using curl
-
-              download_with_curl() {
-
-                local url=$1
-
-                local output=$2
-
-                local http_code
-
-                http_code=$(curl -s -o "$output" -w "%{http_code}" --connect-timeout 10 --max-time 60 --fail --location "$url" 2>/dev/null)
-
-                echo "$http_code"
-
-              }
-
-              # Function to download using wget
-
-              download_with_wget() {
-
-                local url=$1
-
-                local output=$2
-
-                if wget --timeout=60 --tries=1 -O "$output" "$url" 2>/dev/null; then
-
-                  echo "200"
-
-                else
-
-                  echo "000"
-
-                fi
-
-              }
-
-              # Try curl first, then wget as fallback
-
-              for i in $(seq 1 $MAX_RETRIES); do
-
-                echo "Download attempt $i of $MAX_RETRIES..."
-
-                HTTP_CODE="000"
-
-                # Try curl first
-
-                if command -v curl >/dev/null 2>&1; then
-
-                  echo "  Trying curl..."
-
-                  HTTP_CODE=$(download_with_curl "$PLUGIN_URL" "$RPM_FILE")
-
-                fi
-
-                # If curl failed or returned error code, try wget
-
-                if [ "$HTTP_CODE" != "200" ] && command -v wget >/dev/null 2>&1; then
-
-                  echo "  curl failed (HTTP $HTTP_CODE), trying wget..."
-
-                  HTTP_CODE=$(download_with_wget "$PLUGIN_URL" "$RPM_FILE")
-
-                fi
-
-                # Check if download was successful
-
-                if [ "$HTTP_CODE" = "200" ]; then
-
-                  # Verify the file was downloaded and is not empty
-
-                  if [ -s "$RPM_FILE" ]; then
-
-                    echo "✅ Download successful (HTTP $HTTP_CODE)"
-
-                    DOWNLOAD_SUCCESS=true
-
-                    break
-
-                  else
-
-                    echo "⚠️  Downloaded file is empty, retrying..."
-
-                    rm -f "$RPM_FILE"
-
-                    HTTP_CODE="000"
-
-                  fi
-
-                fi
-
-                # Handle different error codes
-
-                if [ "$HTTP_CODE" = "503" ]; then
-
-                  echo "⚠️  Received 503 (Service Unavailable), retrying in ${RETRY_DELAY}s..."
-
-                elif [ "$HTTP_CODE" = "000" ]; then
-
-                  echo "⚠️  Network/connection error, retrying in ${RETRY_DELAY}s..."
-
-                elif [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "200" ]; then
-
-                  echo "⚠️  HTTP $HTTP_CODE error, retrying in ${RETRY_DELAY}s..."
-
-                else
-
-                  echo "⚠️  Unknown error, retrying in ${RETRY_DELAY}s..."
-
-                fi
-
-                # Wait before retry (except on last attempt)
-
-                if [ $i -lt $MAX_RETRIES ]; then
-
-                  sleep $RETRY_DELAY
-
-                  RETRY_DELAY=$((RETRY_DELAY * 2))
-
-                fi
-
-              done
-
-              if [ "$DOWNLOAD_SUCCESS" = false ]; then
-
-                echo "❌ Failed to download Session Manager Plugin after $MAX_RETRIES attempts"
-
-                echo "   URL: $PLUGIN_URL"
-
-                echo "   Last HTTP code: $HTTP_CODE"
-
-                echo "   Available tools:"
-
-                command -v curl >/dev/null 2>&1 && echo "   - curl: yes" || echo "   - curl: no"
-
-                command -v wget >/dev/null 2>&1 && echo "   - wget: yes" || echo "   - wget: no"
-
-                echo "   This may be a temporary AWS S3 issue or network connectivity problem."
-
-                echo "   To avoid this issue, download the RPM file and commit it to the repository:"
-
-                echo "   1. Download: curl -o rpm/session-manager-plugin.rpm $PLUGIN_URL"
-
-                echo "   2. Commit: git add rpm/session-manager-plugin.rpm && git commit -m 'Add Session Manager Plugin RPM'"
-
-                echo "   3. Push: git push"
-
-                exit 1
-
-              fi
-
-            fi
-
-            # Verify downloaded file is a valid RPM
-
-            echo "Verifying RPM file..."
-
-            if ! file "$RPM_FILE" | grep -q "RPM"; then
-
-              # Check if it's an AR archive (RPMs are AR archives)
-
-              if ! file "$RPM_FILE" | grep -qE "(RPM|AR|archive)"; then
-
-                echo "❌ File does not appear to be a valid RPM package"
-
-                echo "   File type: $(file "$RPM_FILE")"
-
-                echo "   File size: $(ls -lh "$RPM_FILE" | awk '{print $5}')"
-
-                rm -f "$RPM_FILE"
-
-                exit 1
-
-              fi
-
-            fi
-
-            echo "✅ RPM file validated"
-
-            # Try to install RPM directly to user directory (no sudo required)
-            INSTALL_DIR="$HOME/.local"
-            PLUGIN_BIN_DIR="$HOME/bin"
-
-            mkdir -p "$PLUGIN_BIN_DIR"
-
-            INSTALLED=false
-
-            # Method 1: Try rpm install with --prefix (if rpm supports it)
-            if command -v rpm >/dev/null 2>&1; then
-              echo "Attempting to install RPM using rpm command..."
-              # Try installing with --prefix to user directory
-              if rpm --prefix "$INSTALL_DIR" -ivh "$RPM_FILE" 2>/dev/null || \
-                 rpm --relocate /usr/local="$INSTALL_DIR" -ivh "$RPM_FILE" 2>/dev/null || \
-                 rpm --root "$INSTALL_DIR" -ivh "$RPM_FILE" 2>/dev/null; then
-                INSTALLED=true
-                echo "✅ RPM installed successfully using rpm command"
-                # Find the binary and copy to ~/bin
-                if [ -f "$INSTALL_DIR/usr/local/sessionmanagerplugin/bin/session-manager-plugin" ]; then
-                  cp "$INSTALL_DIR/usr/local/sessionmanagerplugin/bin/session-manager-plugin" "$PLUGIN_BIN_DIR/"
-                  chmod +x "$PLUGIN_BIN_DIR/session-manager-plugin"
-                elif [ -f "$INSTALL_DIR/usr/local/bin/session-manager-plugin" ]; then
-                  cp "$INSTALL_DIR/usr/local/bin/session-manager-plugin" "$PLUGIN_BIN_DIR/"
-                  chmod +x "$PLUGIN_BIN_DIR/session-manager-plugin"
-                fi
-              else
-                echo "⚠️  rpm install failed (may require root or RPM database), trying extraction method..."
-              fi
-            fi
-
-            # Method 2: Extract RPM manually if installation failed
-            if [ "$INSTALLED" = false ]; then
-              echo "Extracting RPM manually..."
-
-              EXTRACT_DIR=$(mktemp -d)
-
-              # Verify extract directory exists and is writable
-              if [ ! -d "$EXTRACT_DIR" ]; then
-                echo "❌ Failed to create extract directory: $EXTRACT_DIR"
-                exit 1
-              fi
-
-              if [ ! -w "$EXTRACT_DIR" ]; then
-                echo "❌ Extract directory is not writable: $EXTRACT_DIR"
-                exit 1
-              fi
-
-              echo "  Extract directory: $EXTRACT_DIR"
-
-              cd "$EXTRACT_DIR" || {
-                echo "❌ Failed to change to extract directory: $EXTRACT_DIR"
-                exit 1
-              }
-
-              EXTRACTED=false
-
-              # Method 2a: Try rpm2cpio + Python (rpm2cpio outputs CPIO, Python can extract CPIO)
-              if [ "$EXTRACTED" = false ] && command -v rpm2cpio >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-                echo "Extracting RPM package using rpm2cpio + Python..."
-                
-                # Create a Python script that manually parses CPIO format (new ASCII format)
-                PYTHON_CPIO_SCRIPT=$(mktemp)
-                printf 'import sys\n' > "$PYTHON_CPIO_SCRIPT"
-                printf 'import os\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf 'extract_dir = sys.argv[1]\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf 'data = sys.stdin.buffer.read()\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf 'print(f"DEBUG: Read {len(data)} bytes from stdin")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf 'files_extracted = 0\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf 'pos = 0\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf 'try:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    while pos + 110 <= len(data):\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        header = data[pos:pos+110]\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        magic = header[0:6]\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if pos == 0:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            print(f"DEBUG: First magic bytes: {magic}")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if magic != b"070701" and magic != b"070702":\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            if pos == 0:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                print(f"ERROR: Invalid CPIO magic at start: {magic}, expected 070701 or 070702")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                print(f"DEBUG: First 20 bytes: {data[0:20]}")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        try:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            name_len = int(header[94:100].strip(), 16)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            file_size = int(header[54:60].strip(), 16)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        except ValueError as e:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            print(f"ERROR: Failed to parse header at pos {pos}: {e}")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if name_len == 0:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        name_start = pos + 110\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        name_end = name_start + name_len - 1\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if name_end > len(data):\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        name_bytes = data[name_start:name_end]\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        name = name_bytes.decode("utf-8", errors="ignore").rstrip("\\0")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if name == "TRAILER!!!" or not name:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            if files_extracted == 0:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                print(f"DEBUG: Hit TRAILER at pos {pos}, but no files extracted yet")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        name_padding = ((name_len + 3) // 4) * 4\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        file_data_start = pos + 110 + name_padding\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        file_data_end = file_data_start + file_size\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if file_data_end > len(data):\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            print(f"ERROR: File data extends beyond buffer: {file_data_end} > {len(data)}")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        file_data = data[file_data_start:file_data_end]\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        path = os.path.join(extract_dir, name.lstrip("/"))\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if files_extracted < 5:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            print(f"DEBUG: Extracting {name} (size={file_size}, pos={pos})")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        try:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            if file_size > 0:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                dir_path = os.path.dirname(path)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                if dir_path:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                    os.makedirs(dir_path, exist_ok=True)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                with open(path, "wb") as f:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                    f.write(file_data)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                files_extracted += 1\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            else:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                os.makedirs(path, exist_ok=True)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        except Exception as e:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            print(f"ERROR extracting {name}: {e}")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            import traceback\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            traceback.print_exc()\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        file_padding = ((file_size + 3) // 4) * 4\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        pos = file_data_start + file_padding\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if pos >= len(data):\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    print(f"DEBUG: Processed {pos} bytes, extracted {files_extracted} files")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    if files_extracted > 0:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        print(f"SUCCESS: Extracted {files_extracted} files")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        sys.exit(0)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    else:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        print("ERROR: No files extracted")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        print(f"DEBUG: Final position: {pos}, data length: {len(data)}")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        sys.exit(1)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf 'except Exception as e:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    import traceback\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    print(f"ERROR: {e}")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    traceback.print_exc()\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    sys.exit(1)\n' >> "$PYTHON_CPIO_SCRIPT"
-                
-                # Save CPIO to file first, then extract (allows debugging)
-                CPIO_FILE="/tmp/rpm2cpio_output.cpio"
-                set +e
-                echo "  Running rpm2cpio..."
-                if rpm2cpio "$RPM_FILE" > "$CPIO_FILE" 2>/dev/null; then
-                  CPIO_SIZE=$(ls -lh "$CPIO_FILE" | awk '{print $5}')
-                  echo "  CPIO archive created: $CPIO_SIZE"
-                  
-                  # Check CPIO file format
-                  echo "  Checking CPIO format..."
-                  HEADER=$(head -c 10 "$CPIO_FILE" 2>/dev/null | od -An -tx1 | tr -d ' \n' || echo "unknown")
-                  echo "  First 10 bytes (hex): $HEADER"
-                  
-                  # Try extraction
-                  if python3 "$PYTHON_CPIO_SCRIPT" "$EXTRACT_DIR" < "$CPIO_FILE" > /tmp/python_extract.log 2>&1; then
-                    if grep -q "SUCCESS" /tmp/python_extract.log 2>/dev/null; then
-                      EXTRACTED=true
-                      echo "✅ Extraction successful using rpm2cpio + Python"
-                      # Show extraction summary
-                      grep "SUCCESS" /tmp/python_extract.log | sed 's/^/  /'
-                      # Verify files were actually extracted
-                      FILE_COUNT=$(find "$EXTRACT_DIR" -type f 2>/dev/null | wc -l)
-                      echo "  Verified: $FILE_COUNT files in extract directory"
-                      if [ "$FILE_COUNT" -eq 0 ]; then
-                        echo "  ⚠️  Warning: No files found, checking CPIO contents..."
-                        # Try to see what's in the CPIO
-                        head -c 200 "$CPIO_FILE" | strings | head -5 | sed 's/^/     /' || true
-                        EXTRACTED=false
-                      fi
-                    else
-                      echo "⚠️  Python CPIO extraction reported failure"
-                      echo "   Error log:"
-                      cat /tmp/python_extract.log 2>/dev/null | sed 's/^/     /' | head -30 || echo "     (no log available)"
-                    fi
-                  else
-                    PYTHON_EXIT=$?
-                    echo "⚠️  Python CPIO extraction failed (exit code: $PYTHON_EXIT)"
-                    echo "   Error log:"
-                    cat /tmp/python_extract.log 2>/dev/null | sed 's/^/     /' | head -30 || echo "     (no log available)"
-                  fi
-                else
-                  echo "⚠️  rpm2cpio failed to create CPIO archive"
-                fi
-                set -e
-                rm -f /tmp/python_extract.log "$CPIO_FILE"
-                rm -f "$PYTHON_CPIO_SCRIPT"
-              fi
-
-              # Method 2b: Try rpm2cpio and cpio (preferred extraction method if cpio is available)
-
-            if [ "$EXTRACTED" = false ] && command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then
-
-              echo "Extracting RPM package using rpm2cpio..."
-
-              if rpm2cpio "$RPM_FILE" | cpio -idmv >/dev/null 2>&1; then
-
-                EXTRACTED=true
-
-                echo "✅ Extraction successful using rpm2cpio"
-
-              else
-
-                echo "⚠️  rpm2cpio extraction failed, trying alternative method..."
-
-              fi
-
-            fi
-
-            # Method 2: Try ar and tar (alternative method - RPM files are AR archives)
-
-            if [ "$EXTRACTED" = false ] && command -v ar >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
-
-              echo "Extracting RPM package using ar and tar..."
-
-              # Temporarily disable exit on error to capture detailed error messages
-
-              set +e
-
-              # List contents of AR archive to find data.tar.* files
-
-              AR_LIST=""
-              AR_ERROR=""
-
-              ar t "$RPM_FILE" > /tmp/ar_list.txt 2>/tmp/ar_error.txt
-
-              AR_EXIT_CODE=$?
-
-              set -e
-
-              if [ $AR_EXIT_CODE -eq 0 ]; then
-
-                AR_LIST=$(cat /tmp/ar_list.txt 2>/dev/null)
-
-                if [ -n "$AR_LIST" ]; then
-
-                echo "  Found AR archive members:"
-
-                echo "$AR_LIST" | sed 's/^/    /'
-
-                # Try to extract data.tar.* files
-
-                for data_tar in data.tar.gz data.tar.xz data.tar.bz2 data.tar; do
-
-                  if echo "$AR_LIST" | grep -q "^${data_tar}$"; then
-
-                    echo "  Attempting to extract $data_tar..."
-
-                    # Extract the specific file from AR archive
-
-                    TEMP_TAR="/tmp/$(basename "$data_tar")"
-
-                    AR_EXIT_CODE=1
-
-                    ar p "$RPM_FILE" "$data_tar" > "$TEMP_TAR" 2>&1
-
-                    AR_EXIT_CODE=$?
-
-                    if [ $AR_EXIT_CODE -eq 0 ]; then
-
-                      # Check if file was extracted and has content
-
-                      if [ ! -f "$TEMP_TAR" ]; then
-
-                        echo "    ⚠️  Failed to create temp file: $TEMP_TAR"
-
-                        continue
-
-                      fi
-
-                      if [ ! -s "$TEMP_TAR" ]; then
-
-                        echo "    ⚠️  Extracted file is empty, trying next format..."
-
-                        rm -f "$TEMP_TAR"
-
-                        continue
-
-                      fi
-
-                      FILE_SIZE=$(ls -lh "$TEMP_TAR" | awk '{print $5}')
-
-                      echo "    Extracted $data_tar (size: $FILE_SIZE)"
-
-                      # Verify it looks like a tar file
-
-                      if ! file "$TEMP_TAR" | grep -qiE "(tar|gzip|bzip|xz|compressed|archive)"; then
-
-                        echo "    ⚠️  File doesn't appear to be a tar archive, trying next format..."
-
-                        file "$TEMP_TAR"
-
-                        rm -f "$TEMP_TAR"
-
-                        continue
-
-                      fi
-
-                      # Try to extract tar archive based on compression
-
-                      TAR_SUCCESS=false
-
-                      TAR_EXIT_CODE=1
-
-                      if [ "$data_tar" = "data.tar.gz" ]; then
-
-                        echo "    Running: tar -xzf $TEMP_TAR -C $EXTRACT_DIR"
-
-                        tar -xzf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1
-
-                        TAR_EXIT_CODE=$?
-
-                        if [ $TAR_EXIT_CODE -eq 0 ]; then
-
-                          TAR_SUCCESS=true
-
-                          echo "✅ Extraction successful using ar and tar (gzip)"
-
-                        else
-
-                          echo "    ⚠️  tar -xzf failed with exit code: $TAR_EXIT_CODE"
-
-                        fi
-
-                      elif [ "$data_tar" = "data.tar.xz" ]; then
-
-                        echo "    Running: tar -xJf $TEMP_TAR -C $EXTRACT_DIR"
-
-                        tar -xJf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1
-
-                        TAR_EXIT_CODE=$?
-
-                        if [ $TAR_EXIT_CODE -eq 0 ]; then
-
-                          TAR_SUCCESS=true
-
-                          echo "✅ Extraction successful using ar and tar (xz)"
-
-                        else
-
-                          echo "    ⚠️  tar -xJf failed with exit code: $TAR_EXIT_CODE"
-
-                        fi
-
-                      elif [ "$data_tar" = "data.tar.bz2" ]; then
-
-                        echo "    Running: tar -xjf $TEMP_TAR -C $EXTRACT_DIR"
-
-                        tar -xjf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1
-
-                        TAR_EXIT_CODE=$?
-
-                        if [ $TAR_EXIT_CODE -eq 0 ]; then
-
-                          TAR_SUCCESS=true
-
-                          echo "✅ Extraction successful using ar and tar (bzip2)"
-
-                        else
-
-                          echo "    ⚠️  tar -xjf failed with exit code: $TAR_EXIT_CODE"
-
-                        fi
-
-                      elif [ "$data_tar" = "data.tar" ]; then
-
-                        echo "    Running: tar -xf $TEMP_TAR -C $EXTRACT_DIR"
-
-                        tar -xf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1
-
-                        TAR_EXIT_CODE=$?
-
-                        if [ $TAR_EXIT_CODE -eq 0 ]; then
-
-                          TAR_SUCCESS=true
-
-                          echo "✅ Extraction successful using ar and tar (uncompressed)"
-
-                        else
-
-                          echo "    ⚠️  tar -xf failed with exit code: $TAR_EXIT_CODE"
-
-                        fi
-
-                      fi
-
-                      # Verify extraction actually created files
-
-                      if [ "$TAR_SUCCESS" = true ]; then
-
-                        FILE_COUNT=$(find "$EXTRACT_DIR" -type f 2>/dev/null | wc -l)
-
-                        echo "    Extracted $FILE_COUNT files to $EXTRACT_DIR"
-
-                        if [ "$FILE_COUNT" -eq 0 ]; then
-
-                          echo "    ⚠️  Warning: No files were extracted, tar may have failed silently"
-
-                          TAR_SUCCESS=false
-
-                        else
-
-                          EXTRACTED=true
-
-                          break
-
-                        fi
-
-                      fi
-
-                      rm -f "$TEMP_TAR"
-
-                    else
-
-                      echo "    ⚠️  Failed to extract $data_tar from AR archive"
-
-                      rm -f "$TEMP_TAR"
-
-                    fi
-
-                  fi
-
-                done
-
-                if [ "$EXTRACTED" = false ]; then
-
-                  echo "⚠️  ar/tar extraction failed - could not extract data.tar.* from AR archive"
-
-                  echo "   Extracted directory contents:"
-
-                  ls -la "$EXTRACT_DIR" 2>/dev/null || echo "   Directory is empty or doesn't exist"
-
-                fi
-
-                else
-
-                  echo "⚠️  AR archive list is empty"
-
-                fi
-
-                rm -f /tmp/ar_list.txt /tmp/ar_error.txt 2>/dev/null || true
-
-              else
-
-                AR_ERROR=$(cat /tmp/ar_error.txt 2>/dev/null || echo "Unknown error")
-
-                echo "⚠️  Failed to list AR archive contents"
-
-                echo "   ar t command failed"
-
-                echo "   Error output: $AR_ERROR"
-
-                echo "   RPM file: $RPM_FILE"
-
-                echo "   File exists: $([ -f "$RPM_FILE" ] && echo 'yes' || echo 'no')"
-
-                echo "   File size: $([ -f "$RPM_FILE" ] && ls -lh "$RPM_FILE" | awk '{print $5}' || echo 'N/A')"
-
-                rm -f /tmp/ar_list.txt /tmp/ar_error.txt 2>/dev/null || true
-
-              fi
-
-            fi
-
-            # Method 3: Try Python-based extraction (fallback method)
-            if [ "$EXTRACTED" = false ] && command -v python3 >/dev/null 2>&1; then
-              echo "Extracting RPM package using Python..."
-              PYTHON_SCRIPT=$(mktemp)
-              printf 'import io, gzip, bz2, lzma, tarfile, sys\n' > "$PYTHON_SCRIPT"
-              printf 'rpm_file, extract_dir = sys.argv[1], sys.argv[2]\n' >> "$PYTHON_SCRIPT"
-              printf 'try:\n' >> "$PYTHON_SCRIPT"
-              printf '    with open(rpm_file, "rb") as f:\n' >> "$PYTHON_SCRIPT"
-              printf '        if f.read(8) != b"!<arch>\\n": sys.exit(1)\n' >> "$PYTHON_SCRIPT"
-              printf '        while True:\n' >> "$PYTHON_SCRIPT"
-              printf '            h = f.read(60)\n' >> "$PYTHON_SCRIPT"
-              printf '            if len(h) < 60: break\n' >> "$PYTHON_SCRIPT"
-              printf '            if h[:2] == b"`\\n": continue\n' >> "$PYTHON_SCRIPT"
-              printf '            name = h[:16].strip().decode("ascii", errors="ignore").rstrip("/")\n' >> "$PYTHON_SCRIPT"
-              printf '            try: size = int(h[48:58].strip().decode("ascii", errors="ignore"))\n' >> "$PYTHON_SCRIPT"
-              printf '            except: break\n' >> "$PYTHON_SCRIPT"
-              printf '            if name.startswith("data.tar"):\n' >> "$PYTHON_SCRIPT"
-              printf '                d = f.read(size)\n' >> "$PYTHON_SCRIPT"
-              printf '                for df in [gzip.decompress, bz2.decompress, lzma.decompress, lambda x: x]:\n' >> "$PYTHON_SCRIPT"
-              printf '                    try:\n' >> "$PYTHON_SCRIPT"
-              printf '                        with tarfile.open(fileobj=io.BytesIO(df(d))) as tar:\n' >> "$PYTHON_SCRIPT"
-              printf '                            tar.extractall(extract_dir)\n' >> "$PYTHON_SCRIPT"
-              printf '                        print("SUCCESS")\n' >> "$PYTHON_SCRIPT"
-              printf '                        sys.exit(0)\n' >> "$PYTHON_SCRIPT"
-              printf '                    except: pass\n' >> "$PYTHON_SCRIPT"
-              printf '                break\n' >> "$PYTHON_SCRIPT"
-              printf '            else:\n' >> "$PYTHON_SCRIPT"
-              printf '                if size %% 2: size += 1\n' >> "$PYTHON_SCRIPT"
-              printf '                f.seek(size, 1)\n' >> "$PYTHON_SCRIPT"
-              printf '        sys.exit(1)\n' >> "$PYTHON_SCRIPT"
-              printf 'except: sys.exit(1)\n' >> "$PYTHON_SCRIPT"
-              if python3 "$PYTHON_SCRIPT" "$RPM_FILE" "$EXTRACT_DIR" 2>/dev/null | grep -q "SUCCESS"; then
-                EXTRACTED=true
-                echo "✅ Extraction successful using Python"
-              else
-                echo "⚠️  Python extraction failed"
-              fi
-              rm -f "$PYTHON_SCRIPT"
-            fi
-
-            if [ "$EXTRACTED" = false ]; then
-              echo "❌ No extraction tools available or extraction failed"
-              echo "   Available tools:"
-              command -v rpm2cpio >/dev/null 2>&1 && echo "   - rpm2cpio: yes" || echo "   - rpm2cpio: no"
-              command -v cpio >/dev/null 2>&1 && echo "   - cpio: yes" || echo "   - cpio: no"
-              command -v ar >/dev/null 2>&1 && echo "   - ar: yes" || echo "   - ar: no"
-              command -v tar >/dev/null 2>&1 && echo "   - tar: yes" || echo "   - tar: no"
-              command -v python3 >/dev/null 2>&1 && echo "   - python3: yes" || echo "   - python3: no"
-              echo ""
-              echo "   Please install one of the following:"
-              echo "   - rpm2cpio and cpio"
-              echo "   - ar and tar"
-              echo "   - python3 (with standard library)"
-              exit 1
-            fi
-
-            # Verify extraction and find the extracted binary
-            echo "Verifying extracted contents..."
-            echo "  Extract directory: $EXTRACT_DIR"
-            echo "  Contents:"
-            ls -la "$EXTRACT_DIR" 2>/dev/null | head -20 | sed 's/^/    /' || echo "    (empty)"
-            echo "  Searching for session-manager-plugin binary..."
-            find "$EXTRACT_DIR" -name "session-manager-plugin" -type f 2>/dev/null | sed 's/^/    /' || echo "    (not found)"
-
-            # Find the extracted binary (check common locations)
-            BINARY_PATH=""
-            if [ -f "$EXTRACT_DIR/usr/local/sessionmanagerplugin/bin/session-manager-plugin" ]; then
-              BINARY_PATH="$EXTRACT_DIR/usr/local/sessionmanagerplugin/bin/session-manager-plugin"
-            elif [ -f "$EXTRACT_DIR/usr/local/bin/session-manager-plugin" ]; then
-              BINARY_PATH="$EXTRACT_DIR/usr/local/bin/session-manager-plugin"
-            else
-              # Try to find it anywhere in the extracted directory
-              BINARY_PATH=$(find "$EXTRACT_DIR" -name "session-manager-plugin" -type f 2>/dev/null | head -1)
-            fi
-
-            if [ -n "$BINARY_PATH" ] && [ -f "$BINARY_PATH" ]; then
-
-              echo "  Found binary at: $BINARY_PATH"
-
-              # Copy to user bin directory (no sudo required)
-
-              cp "$BINARY_PATH" "$PLUGIN_BIN_DIR/"
-
-              # Make executable
-
-              chmod +x "$PLUGIN_BIN_DIR/session-manager-plugin"
-
-              INSTALLED=true
-
-              echo "✅ Extracted and installed to ~/bin/"
-
-            else
-
-              echo "❌ Failed to find extracted binary after extraction"
-
-              echo "   Extract directory: $EXTRACT_DIR"
-
-              echo "   Directory structure:"
-
-              find "$EXTRACT_DIR" -type f 2>/dev/null | head -20 | sed 's/^/     /' || echo "     (no files found)"
-
-              echo "   Directory tree (first 3 levels):"
-
-              find "$EXTRACT_DIR" -maxdepth 3 -type d 2>/dev/null | sed 's/^/     /' || echo "     (no directories found)"
-
-              exit 1
-
-            fi
-
-              # Clean up extraction directory
-
-              rm -rf "$EXTRACT_DIR" 2>/dev/null || true
-
-            fi
-
-            # Clean up RPM file
-
-            rm -f "$RPM_FILE" 2>/dev/null || true
-
-            # Verify installation (use full path since PATH might not be updated yet)
-
-            if [ "$INSTALLED" = true ] && [ -x "$PLUGIN_BIN_DIR/session-manager-plugin" ]; then
-
-              "$PLUGIN_BIN_DIR/session-manager-plugin" --version
-
-              echo "✅ Session Manager Plugin installed successfully"
-
-              # Add to PATH for subsequent steps
-
-              echo "$HOME/bin" >> $GITHUB_PATH
-
-            else
-
-              echo "❌ Failed to install Session Manager Plugin"
-
-              echo "   Installation method: $([ "$INSTALLED" = true ] && echo 'rpm install' || echo 'extraction')"
-
-              echo "   Binary location: $PLUGIN_BIN_DIR/session-manager-plugin"
-
-              echo "   Binary exists: $([ -f "$PLUGIN_BIN_DIR/session-manager-plugin" ] && echo 'yes' || echo 'no')"
-
-              echo "   Binary executable: $([ -x "$PLUGIN_BIN_DIR/session-manager-plugin" ] && echo 'yes' || echo 'no')"
-
-              exit 1
-
-            fi
-
+            exit 0
           fi
-
- 
+          
+          echo "Installing Session Manager Plugin..."
+          LOCAL_RPM="rpm/session-manager-plugin.rpm"
+          RPM_FILE="/tmp/session-manager-plugin.rpm"
+          
+          # Use local RPM if available, otherwise download
+          if [ -f "$LOCAL_RPM" ]; then
+            echo "✅ Found local RPM file: $LOCAL_RPM"
+            cp "$LOCAL_RPM" "$RPM_FILE"
+          else
+            echo "Downloading from AWS..."
+            PLUGIN_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
+            curl -fsSL "$PLUGIN_URL" -o "$RPM_FILE" || {
+              echo "❌ Failed to download Session Manager Plugin"
+              exit 1
+            }
+          fi
+          
+          # Verify cpio is available (CRITICAL)
+          if ! command -v cpio >/dev/null 2>&1; then
+            echo "❌ CRITICAL: cpio is not installed"
+            echo "Cannot extract RPM without cpio"
+            echo "Run: dnf install -y cpio"
+            exit 1
+          fi
+          
+          # Extract RPM using rpm2cpio + cpio (the standard method)
+          echo "Extracting RPM package..."
+          EXTRACT_DIR=$(mktemp -d)
+          cd "$EXTRACT_DIR"
+          
+          if rpm2cpio "$RPM_FILE" | cpio -idmv 2>&1 | grep -q "blocks"; then
+            echo "✅ Extraction successful"
+          else
+            echo "❌ Extraction failed"
+            exit 1
+          fi
+          
+          # Find and install the binary
+          BINARY_PATH=$(find "$EXTRACT_DIR" -name "session-manager-plugin" -type f | head -1)
+          if [ -z "$BINARY_PATH" ]; then
+            echo "❌ Binary not found after extraction"
+            exit 1
+          fi
+          
+          echo "Found binary at: $BINARY_PATH"
+          mkdir -p ~/bin
+          cp "$BINARY_PATH" ~/bin/
+          chmod +x ~/bin/session-manager-plugin
+          echo "$HOME/bin" >> $GITHUB_PATH
+          
+          # Verify installation
+          ~/bin/session-manager-plugin --version
+          echo "✅ Session Manager Plugin installed successfully"
+          
+          # Cleanup
+          rm -rf "$EXTRACT_DIR" "$RPM_FILE"
 
       - name: Initialize Packer
-
         run: packer init aws-golden-image.pkr.hcl
 
- 
-
       - name: Build Packer image
-
         run: |
-
-          PACKER_BUILD_CMD="packer build \
-
-            -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\""
-
-          # Add IAM instance profile variable if provided
-
+          PACKER_BUILD_CMD="packer build -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\""
+          
           if [ -n "${{ env.PKR_VAR_iam_instance_profile }}" ]; then
-
-          PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
-
-          echo "Using IAM Instance Profile: ${{ env.PKR_VAR_iam_instance_profile }}"
-
+            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
           fi
-
-          # Add VPC and subnet variables if provided
-
-          # Note: If subnet_id is provided, vpc_id should also be provided
-
+          
           if [ -n "${{ env.PKR_VAR_vpc_id }}" ]; then
-
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"vpc_id=${{ env.PKR_VAR_vpc_id }}\""
-
-            echo "Using VPC ID: ${{ env.PKR_VAR_vpc_id }}"
-
           fi
-
+          
           if [ -n "${{ env.PKR_VAR_subnet_id }}" ]; then
-
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"subnet_id=${{ env.PKR_VAR_subnet_id }}\""
-
-            echo "Using Subnet ID: ${{ env.PKR_VAR_subnet_id }}"
-
           fi
-
-          # Add security group IDs if provided (comma-separated string converted to HCL list)
-
-          # Note: We read directly from vars.SECURITY_GROUP_IDS to avoid Packer parsing env vars
-
-          # Packer expects HCL list syntax: ["sg-123","sg-456"]
-
+          
           SECURITY_GROUP_IDS="${{ vars.SECURITY_GROUP_IDS }}"
-
-          if [ -n "$SECURITY_GROUP_IDS" ] && [ "$SECURITY_GROUP_IDS" != "" ]; then
-
-            # Convert comma-separated string to HCL list format
-
-            # Split by comma, trim spaces, wrap each in quotes, join with commas, wrap in brackets
-
-            SG_IDS="$SECURITY_GROUP_IDS"
-
-            # Create HCL list format: ["sg-123","sg-456"]
-
-            # Process each security group ID
-
-            SG_HCL=$(echo "$SG_IDS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//' | sed 's/^/[/;s/$/]/')
-
-            # Write to a temporary var file to avoid shell quoting issues
-
-            # Packer requires var files to have .hcl or .json extension
-
+          if [ -n "$SECURITY_GROUP_IDS" ]; then
+            SG_HCL=$(echo "$SECURITY_GROUP_IDS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//' | sed 's/^/[/;s/$/]/')
             VAR_FILE=$(mktemp --suffix=.hcl)
-
             echo "security_group_ids = $SG_HCL" > "$VAR_FILE"
-
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var-file=$VAR_FILE"
-
-            echo "Using Security Group IDs: $SECURITY_GROUP_IDS"
-
-            echo "HCL format: $SG_HCL"
-
-            echo "Var file content:"
-
-            cat "$VAR_FILE"
-
           fi
-
+          
           PACKER_BUILD_CMD="${PACKER_BUILD_CMD} aws-golden-image.pkr.hcl"
-
           eval $PACKER_BUILD_CMD
 
- 
-
       - name: Output AMI ID
-
         if: success()
-
         run: |
-
-          echo "AMI build completed successfully!"
-
+          echo "✅ AMI build completed successfully!"
           echo "Check AWS EC2 Console for the latest AMI"
