@@ -58,6 +58,8 @@ env:
 
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
 
+  PKR_VAR_security_group_ids: ${{ vars.SECURITY_GROUP_IDS || '' }}
+
  
 
 jobs:
@@ -794,6 +796,84 @@ jobs:
 
           fi
 
+          echo ""
+
+          echo "=== Private Subnet Requirements for SSM ==="
+
+          if [ -n "$SUBNET_ID" ]; then
+
+            echo "⚠️  IMPORTANT: Instance will be launched in a private subnet"
+
+            echo ""
+
+            echo "   For SSM Session Manager to work in private subnets, ensure:"
+
+            echo ""
+
+            echo "   1. Security Group:"
+
+            echo "      - Packer WILL auto-create a security group if not specified"
+
+            echo "      - Packer CANNOT automatically add outbound HTTPS (443) rules to temporary SGs"
+
+            echo "      - AWS security groups allow ALL outbound by default (unless restricted)"
+
+            echo "      - Packer's auto-created SG MIGHT work if default outbound rules apply"
+
+            echo "      - RECOMMENDED: Pre-create a security group with explicit outbound HTTPS (443) rule"
+
+            echo "      - Set GitHub repository variable: SECURITY_GROUP_IDS (comma-separated)"
+
+            echo "      - Example: SECURITY_GROUP_IDS=sg-1234567890abcdef0"
+
+            echo "      - This ensures SSM works reliably in private subnets"
+
+            echo ""
+
+            echo "   2. Network Connectivity (choose one):"
+
+            echo "      Option A: NAT Gateway"
+
+            echo "        - Route table routes 0.0.0.0/0 to NAT Gateway"
+
+            echo "        - Security group allows outbound HTTPS (443) to 0.0.0.0/0"
+
+            echo ""
+
+            echo "      Option B: VPC Endpoints (for fully isolated subnets)"
+
+            echo "        - Create VPC endpoints for:"
+
+            echo "          * com.amazonaws.${REGION}.ssm (SSM service)"
+
+            echo "          * com.amazonaws.${REGION}.ssmmessages (SSM messages)"
+
+            echo "          * com.amazonaws.${REGION}.ec2 (EC2 API)"
+
+            echo "        - Security group allows outbound HTTPS (443) to VPC endpoints"
+
+            echo "        - Route table has routes to VPC endpoints"
+
+            echo ""
+
+            echo "   3. Verify IAM Instance Profile:"
+
+            echo "      - Must have AmazonSSMManagedInstanceCore policy"
+
+            echo "      - Currently using: ${IAM_PROFILE:-'Packer will create temporary one'}"
+
+            echo ""
+
+            echo "   Troubleshooting:"
+
+            echo "      - If SSM fails, check Packer's auto-created security group outbound rules"
+
+            echo "      - Default AWS security groups allow all outbound, but verify this"
+
+            echo "      - Pre-creating a security group with explicit HTTPS (443) rule is most reliable"
+
+          fi
+
  
 
       - name: Build Packer image
@@ -831,6 +911,24 @@ jobs:
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"subnet_id=${{ env.PKR_VAR_subnet_id }}\""
 
             echo "Using Subnet ID: ${{ env.PKR_VAR_subnet_id }}"
+
+          fi
+
+          # Add security group IDs if provided (comma-separated string converted to JSON array)
+
+          if [ -n "${{ env.PKR_VAR_security_group_ids }}" ]; then
+
+            # Convert comma-separated string to JSON array format
+
+            SG_IDS="${{ env.PKR_VAR_security_group_ids }}"
+
+            # Remove spaces and create JSON array
+
+            SG_JSON=$(echo "$SG_IDS" | tr ',' '\n' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//' | sed 's/^/[/;s/$/]/')
+
+            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"security_group_ids=$SG_JSON\""
+
+            echo "Using Security Group IDs: ${{ env.PKR_VAR_security_group_ids }}"
 
           fi
 

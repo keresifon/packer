@@ -96,6 +96,18 @@ variable "subnet_id" {
 
  
 
+variable "security_group_ids" {
+
+  type        = list(string)
+
+  description = "List of security group IDs to attach to the instance (optional - Packer creates temporary one if not specified). For private subnets, pre-create a security group with outbound HTTPS (443) to VPC endpoints."
+
+  default     = []
+
+}
+
+ 
+
 # Data source for latest Amazon Linux 2023 AMI
 
 data "amazon-ami" "amazonlinux2023" {
@@ -260,23 +272,31 @@ source "amazon-ebs" "amazonlinux2023" {
 
   # Security group configuration
 
-  # IMPORTANT: When using ssh_interface = "session_manager", Packer should NOT create SSH rules
+  # IMPORTANT: When using ssh_interface = "session_manager":
 
-  # For private subnets, you MUST pre-create a security group with:
+  # - Packer WILL create a temporary security group automatically if security_group_ids is not specified
 
-  # - Outbound HTTPS (443) to VPC endpoints (or 0.0.0.0/0 if using VPC endpoints)
+  # - However, Packer's auto-created security group may NOT have outbound HTTPS (443) rules
 
-  # - No inbound rules required (SSM uses outbound connections)
+  # - For private subnets, SSM Session Manager REQUIRES outbound HTTPS (443) to:
 
-  # Packer will create a temporary security group if security_group_ids is not specified
+  #   * VPC endpoints (if using VPC endpoints), OR
 
-  # With ssh_interface = "session_manager", Packer should detect SSM and skip SSH port 22 rules
+  #   * 0.0.0.0/0 via NAT Gateway (if using NAT Gateway)
 
-  # RECOMMENDED: Pre-create a security group and specify it here for private subnets:
+  # - RECOMMENDED for private subnets: Pre-create a security group with outbound HTTPS (443) rule
 
-  # The security group must allow outbound HTTPS (443) to VPC endpoints
+  # - Packer's auto-created security group works fine for public subnets or if NAT Gateway provides internet access
 
-  # security_group_ids = ["sg-xxxxxxxxx"]
+  # Example AWS CLI to create security group for private subnet:
+
+  # aws ec2 create-security-group --group-name packer-ssm-sg --description "Security group for Packer SSM" --vpc-id vpc-xxxxx
+
+  # aws ec2 authorize-security-group-egress --group-id sg-xxxxx --protocol tcp --port 443 --cidr 0.0.0.0/0
+
+  # If security_group_ids is not specified, Packer will create a temporary one (may not have HTTPS outbound rule)
+
+  security_group_ids = length(var.security_group_ids) > 0 ? var.security_group_ids : null
 
  
 
