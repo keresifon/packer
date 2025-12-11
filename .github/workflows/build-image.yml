@@ -658,6 +658,84 @@ jobs:
 
  
 
+      - name: Install AWS Session Manager Plugin
+
+        run: |
+
+          echo "=== Installing AWS Session Manager Plugin ==="
+
+          # Check if session-manager-plugin is already installed
+
+          if command -v session-manager-plugin >/dev/null 2>&1; then
+
+            echo "Session Manager Plugin is already installed:"
+
+            session-manager-plugin --version
+
+          else
+
+            echo "Installing Session Manager Plugin..."
+
+            # Download and install Session Manager Plugin for Linux
+
+            PLUGIN_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
+
+            curl -o /tmp/session-manager-plugin.rpm "$PLUGIN_URL"
+
+            # Install using dnf (RHEL 9.6)
+
+            sudo dnf install -y /tmp/session-manager-plugin.rpm || {
+
+              echo "dnf install failed, trying rpm directly..."
+
+              sudo rpm -ivh /tmp/session-manager-plugin.rpm || {
+
+                echo "rpm install failed, trying manual extraction..."
+
+                # Fallback: extract and install manually
+
+                cd /tmp
+
+                rpm2cpio session-manager-plugin.rpm | cpio -idmv
+
+                sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/bin/ || \
+
+                sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/bin/ || \
+
+                cp usr/local/sessionmanagerplugin/bin/session-manager-plugin ~/bin/ || \
+
+                cp usr/local/sessionmanagerplugin/bin/session-manager-plugin ./
+
+              }
+
+            }
+
+            # Clean up
+
+            rm -f /tmp/session-manager-plugin.rpm
+
+            # Verify installation
+
+            if command -v session-manager-plugin >/dev/null 2>&1; then
+
+              session-manager-plugin --version
+
+              echo "✅ Session Manager Plugin installed successfully"
+
+            else
+
+              echo "⚠️  Warning: session-manager-plugin may not be in PATH"
+
+              echo "   Trying to find it..."
+
+              find /usr -name session-manager-plugin 2>/dev/null || echo "Plugin not found"
+
+            fi
+
+          fi
+
+ 
+
       - name: Initialize Packer
 
         run: packer init aws-golden-image.pkr.hcl
@@ -676,9 +754,9 @@ jobs:
 
           if [ -n "${{ env.PKR_VAR_iam_instance_profile }}" ]; then
 
-            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
+          PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
 
-            echo "Using IAM Instance Profile: ${{ env.PKR_VAR_iam_instance_profile }}"
+          echo "Using IAM Instance Profile: ${{ env.PKR_VAR_iam_instance_profile }}"
 
           fi
 
