@@ -882,20 +882,47 @@ jobs:
 
             echo "✅ RPM file validated"
 
-            # Extract RPM manually (doesn't require RPM database or sudo)
+            # Try to install RPM directly to user directory (no sudo required)
+            INSTALL_DIR="$HOME/.local"
+            PLUGIN_BIN_DIR="$HOME/bin"
 
-            EXTRACT_DIR=$(mktemp -d)
+            mkdir -p "$PLUGIN_BIN_DIR"
 
-            cd "$EXTRACT_DIR"
+            INSTALLED=false
 
-            EXTRACTED=false
-
-            # Check and try to install cpio if rpm2cpio is available but cpio is missing
-            if command -v rpm2cpio >/dev/null 2>&1 && ! command -v cpio >/dev/null 2>&1; then
-              echo "rpm2cpio is available but cpio is missing, will use ar/tar method instead"
+            # Method 1: Try rpm install with --prefix (if rpm supports it)
+            if command -v rpm >/dev/null 2>&1; then
+              echo "Attempting to install RPM using rpm command..."
+              # Try installing with --prefix to user directory
+              if rpm --prefix "$INSTALL_DIR" -ivh "$RPM_FILE" 2>/dev/null || \
+                 rpm --relocate /usr/local="$INSTALL_DIR" -ivh "$RPM_FILE" 2>/dev/null || \
+                 rpm --root "$INSTALL_DIR" -ivh "$RPM_FILE" 2>/dev/null; then
+                INSTALLED=true
+                echo "✅ RPM installed successfully using rpm command"
+                # Find the binary and copy to ~/bin
+                if [ -f "$INSTALL_DIR/usr/local/sessionmanagerplugin/bin/session-manager-plugin" ]; then
+                  cp "$INSTALL_DIR/usr/local/sessionmanagerplugin/bin/session-manager-plugin" "$PLUGIN_BIN_DIR/"
+                  chmod +x "$PLUGIN_BIN_DIR/session-manager-plugin"
+                elif [ -f "$INSTALL_DIR/usr/local/bin/session-manager-plugin" ]; then
+                  cp "$INSTALL_DIR/usr/local/bin/session-manager-plugin" "$PLUGIN_BIN_DIR/"
+                  chmod +x "$PLUGIN_BIN_DIR/session-manager-plugin"
+                fi
+              else
+                echo "⚠️  rpm install failed (may require root or RPM database), trying extraction method..."
+              fi
             fi
 
-            # Method 1: Try rpm2cpio and cpio (preferred method)
+            # Method 2: Extract RPM manually if installation failed
+            if [ "$INSTALLED" = false ]; then
+              echo "Extracting RPM manually..."
+
+              EXTRACT_DIR=$(mktemp -d)
+
+              cd "$EXTRACT_DIR"
+
+              EXTRACTED=false
+
+              # Method 2a: Try rpm2cpio and cpio (preferred extraction method)
 
             if command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then
 
@@ -1079,49 +1106,53 @@ jobs:
               exit 1
             fi
 
-            # Find the extracted binary
+              # Find the extracted binary
 
-            if [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
+              if [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
 
-              # Create user bin directory if it doesn't exist
+                # Copy to user bin directory (no sudo required)
 
-              mkdir -p ~/bin
+                cp usr/local/sessionmanagerplugin/bin/session-manager-plugin "$PLUGIN_BIN_DIR/"
 
-              # Copy to user bin directory (no sudo required)
+                # Make executable
 
-              cp usr/local/sessionmanagerplugin/bin/session-manager-plugin ~/bin/
+                chmod +x "$PLUGIN_BIN_DIR/session-manager-plugin"
 
-              # Make executable
+                INSTALLED=true
 
-              chmod +x ~/bin/session-manager-plugin
+                echo "✅ Extracted and installed to ~/bin/"
 
-              echo "✅ Installed to ~/bin/"
+              else
 
-            else
+                echo "❌ Failed to find extracted binary after extraction"
 
-              echo "❌ Failed to find extracted binary after extraction"
+                echo "   Checking extracted contents..."
 
-              echo "   Checking extracted contents..."
+                find . -name "session-manager-plugin" -type f 2>/dev/null || echo "   Binary not found"
 
-              find . -name "session-manager-plugin" -type f 2>/dev/null || echo "   Binary not found"
+                echo "   Listing extracted files:"
 
-              echo "   Listing extracted files:"
+                ls -la usr/local/sessionmanagerplugin/bin/ 2>/dev/null || echo "   Directory not found"
 
-              ls -la usr/local/sessionmanagerplugin/bin/ 2>/dev/null || echo "   Directory not found"
+                exit 1
 
-              exit 1
+              fi
+
+              # Clean up extraction directory
+
+              rm -rf "$EXTRACT_DIR" 2>/dev/null || true
 
             fi
 
-            # Clean up
+            # Clean up RPM file
 
-            rm -rf "$RPM_FILE" "$EXTRACT_DIR" 2>/dev/null || true
+            rm -f "$RPM_FILE" 2>/dev/null || true
 
             # Verify installation (use full path since PATH might not be updated yet)
 
-            if [ -x ~/bin/session-manager-plugin ]; then
+            if [ "$INSTALLED" = true ] && [ -x "$PLUGIN_BIN_DIR/session-manager-plugin" ]; then
 
-              ~/bin/session-manager-plugin --version
+              "$PLUGIN_BIN_DIR/session-manager-plugin" --version
 
               echo "✅ Session Manager Plugin installed successfully"
 
@@ -1133,7 +1164,13 @@ jobs:
 
               echo "❌ Failed to install Session Manager Plugin"
 
-              echo "   Binary not found or not executable"
+              echo "   Installation method: $([ "$INSTALLED" = true ] && echo 'rpm install' || echo 'extraction')"
+
+              echo "   Binary location: $PLUGIN_BIN_DIR/session-manager-plugin"
+
+              echo "   Binary exists: $([ -f "$PLUGIN_BIN_DIR/session-manager-plugin" ] && echo 'yes' || echo 'no')"
+
+              echo "   Binary executable: $([ -x "$PLUGIN_BIN_DIR/session-manager-plugin" ] && echo 'yes' || echo 'no')"
 
               exit 1
 
