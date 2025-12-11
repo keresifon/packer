@@ -1,3 +1,4 @@
+
 name: Build Amazon Linux 2023 Golden Image
 
 on:
@@ -57,23 +58,15 @@ jobs:
           fi
           
           # Look for cpio RPM in rpm directory
-          CPIO_RPM="rpm/cpio-*.rpm"
-          
-          if ! ls $CPIO_RPM 1> /dev/null 2>&1; then
+          if ! ls rpm/cpio-*.rpm 1> /dev/null 2>&1; then
             echo "❌ ERROR: cpio RPM not found in rpm/ directory"
             echo ""
             echo "Please download cpio RPM and add it to your repository:"
-            echo ""
-            echo "On a RHEL 9.6 machine with internet access, run:"
             echo "  mkdir -p rpm"
             echo "  dnf download cpio --downloaddir=rpm/"
             echo "  git add rpm/cpio-*.rpm"
             echo "  git commit -m 'Add cpio RPM for offline installation'"
             echo "  git push"
-            echo ""
-            echo "Alternative: Download from RHEL mirror:"
-            echo "  https://vault.centos.org/9-stream/BaseOS/x86_64/os/Packages/"
-            echo "  Look for: cpio-2.13-*.el9.x86_64.rpm"
             exit 1
           fi
           
@@ -81,148 +74,101 @@ jobs:
           CPIO_RPM_FILE=$(ls rpm/cpio-*.rpm 2>/dev/null | head -1)
           echo "Found cpio RPM: $CPIO_RPM_FILE"
           
-          # Extract RPM using Python
-          echo "Extracting cpio RPM using Python..."
+          # Extract using Python
+          echo "Extracting cpio RPM..."
           EXTRACT_DIR=$(mktemp -d)
-          PYTHON_SCRIPT=$(mktemp --suffix=.py)
           
-          cat > "$PYTHON_SCRIPT" << 'PYTHON_EOF'
-import sys
-import os
-import gzip
-import tarfile
-import io
-
-rpm_file = sys.argv[1]
-extract_dir = sys.argv[2]
-
-try:
-    with open(rpm_file, 'rb') as f:
-        # Read AR archive header
-        if f.read(8) != b'!<arch>\n':
-            print("Not an AR archive format")
-            sys.exit(1)
-        
-        while True:
-            # Read AR member header (60 bytes)
-            header = f.read(60)
-            if len(header) < 60:
-                break
-            
-            # Skip padding
-            if header[:2] == b'`\n':
-                continue
-            
-            # Parse filename and size
-            name = header[:16].strip().decode('ascii', errors='ignore').rstrip('/')
-            try:
-                size = int(header[48:58].strip().decode('ascii', errors='ignore'))
-            except:
-                break
-            
-            # Look for data.tar.gz or similar
-            if name.startswith('data.tar'):
-                print(f"Found: {name} (size: {size})")
-                data = f.read(size)
-                
-                # Try different decompression methods
-                for decompress in [gzip.decompress, lambda x: x]:
-                    try:
-                        decompressed = decompress(data)
-                        tar = tarfile.open(fileobj=io.BytesIO(decompressed))
-                        tar.extractall(extract_dir)
-                        print(f"✅ Extracted {len(tar.getmembers())} files")
-                        sys.exit(0)
-                    except:
-                        continue
-            else:
-                # Skip to next member (aligned to 2 bytes)
-                if size % 2:
-                    size += 1
-                f.seek(size, 1)
-    
-    print("❌ data.tar not found in RPM")
-    sys.exit(1)
-except Exception as e:
-    print(f"❌ Error: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-PYTHON_EOF
+          python3 - "$CPIO_RPM_FILE" "$EXTRACT_DIR" << 'PYTHON_SCRIPT'
+          import sys
+          import os
+          import gzip
+          import tarfile
+          import io
           
-          python3 "$PYTHON_SCRIPT" "$CPIO_RPM_FILE" "$EXTRACT_DIR"
-          PYTHON_EXIT=$?
-          rm -f "$PYTHON_SCRIPT"
+          rpm_file = sys.argv[1]
+          extract_dir = sys.argv[2]
           
-          if [ $PYTHON_EXIT -ne 0 ]; then
+          try:
+              with open(rpm_file, 'rb') as f:
+                  # Read AR archive header
+                  if f.read(8) != b'!<arch>\n':
+                      print("Not an AR archive format")
+                      sys.exit(1)
+                  
+                  while True:
+                      header = f.read(60)
+                      if len(header) < 60:
+                          break
+                      
+                      if header[:2] == b'`\n':
+                          continue
+                      
+                      name = header[:16].strip().decode('ascii', errors='ignore').rstrip('/')
+                      try:
+                          size = int(header[48:58].strip().decode('ascii', errors='ignore'))
+                      except:
+                          break
+                      
+                      if name.startswith('data.tar'):
+                          print(f"Extracting {name}...")
+                          data = f.read(size)
+                          
+                          for decompress in [gzip.decompress, lambda x: x]:
+                              try:
+                                  decompressed = decompress(data)
+                                  tar = tarfile.open(fileobj=io.BytesIO(decompressed))
+                                  tar.extractall(extract_dir)
+                                  print(f"✅ Extracted {len(tar.getmembers())} files")
+                                  sys.exit(0)
+                              except:
+                                  continue
+                      else:
+                          if size % 2:
+                              size += 1
+                          f.seek(size, 1)
+              
+              print("❌ data.tar not found in RPM")
+              sys.exit(1)
+          except Exception as e:
+              print(f"❌ Error: {e}")
+              import traceback
+              traceback.print_exc()
+              sys.exit(1)
+          PYTHON_SCRIPT
           
           if [ $? -ne 0 ]; then
-            echo "⚠️  Python extraction failed, trying alternative method..."
-            
-            # Alternative: Use ar and tar if available
-            if command -v ar >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
-              cd "$EXTRACT_DIR"
-              ar x "$OLDPWD/$CPIO_RPM_FILE" 2>/dev/null || true
-              for tarfile in data.tar.* data.tar; do
-                if [ -f "$tarfile" ]; then
-                  tar -xf "$tarfile" 2>/dev/null && break
-                fi
-              done
-              cd - >/dev/null
-            else
-              echo "❌ Cannot extract RPM without ar/tar or working Python"
-              exit 1
-            fi
-          fi
-          
-          # Find cpio binary in extracted files
-          CPIO_BINARY=$(find "$EXTRACT_DIR" -name "cpio" -type f -executable | head -1)
-          
-          if [ -z "$CPIO_BINARY" ]; then
-            echo "❌ cpio binary not found in extracted RPM"
-            echo "Extracted files:"
-            find "$EXTRACT_DIR" -type f | head -20
+            echo "❌ Failed to extract RPM"
             exit 1
           fi
           
-          echo "Found cpio binary: $CPIO_BINARY"
+          # Find and install cpio binary
+          CPIO_BINARY=$(find "$EXTRACT_DIR" -path "*/bin/cpio" -type f | head -1)
           
-          # Copy to ~/bin
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "⚠️  Looking for cpio in alternative locations..."
+            CPIO_BINARY=$(find "$EXTRACT_DIR" -name "cpio" -type f -executable | head -1)
+          fi
+          
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "❌ cpio binary not found"
+            echo "Extracted structure:"
+            find "$EXTRACT_DIR" -type f | head -30
+            exit 1
+          fi
+          
+          echo "Found: $CPIO_BINARY"
           cp "$CPIO_BINARY" ~/bin/cpio
           chmod +x ~/bin/cpio
           
-          # Verify installation
-          if ~/bin/cpio --version; then
-            echo "✅ cpio installed successfully to ~/bin"
-          else
-            echo "❌ cpio installation verification failed"
-            exit 1
-          fi
+          ~/bin/cpio --version
+          echo "✅ cpio installed to ~/bin"
           
-          # Cleanup
           rm -rf "$EXTRACT_DIR"
 
-      - name: Install other dependencies to user directory
+      - name: Install other dependencies
         run: |
-          echo "=== Installing other dependencies ==="
-          
-          # Install jq if not available
-          if ! command -v jq >/dev/null 2>&1; then
-            # Check for local jq binary first
-            if [ -f "bin/jq" ]; then
-              echo "Installing jq from local file..."
-              cp bin/jq ~/bin/jq
-              chmod +x ~/bin/jq
-            else
-              echo "⚠️  jq not found locally, workflow may fail if needed"
-            fi
-          fi
-          
-          # Verify critical tools
-          echo ""
-          echo "=== Verification ==="
+          echo "=== Verifying dependencies ==="
           command -v cpio && echo "✅ cpio: $(cpio --version | head -1)" || { echo "❌ cpio: MISSING"; exit 1; }
-          command -v jq && echo "✅ jq: $(jq --version)" || echo "⚠️  jq: not available"
           command -v curl && echo "✅ curl: available" || echo "❌ curl: MISSING"
           command -v unzip && echo "✅ unzip: available" || echo "❌ unzip: MISSING"
           command -v tar && echo "✅ tar: available" || echo "❌ tar: MISSING"
@@ -232,7 +178,6 @@ PYTHON_EOF
         run: |
           PACKER_VERSION="1.10.0"
           
-          # Check if Packer is already installed
           if command -v packer >/dev/null 2>&1; then
             INSTALLED_VERSION=$(packer version | head -1 | awk '{print $2}' | sed 's/v//')
             if [ "$INSTALLED_VERSION" == "$PACKER_VERSION" ]; then
@@ -242,14 +187,13 @@ PYTHON_EOF
             fi
           fi
           
-          echo "Installing Packer ${PACKER_VERSION} from local file or download..."
+          echo "Installing Packer ${PACKER_VERSION}..."
           
-          # Check for local Packer zip
           if [ -f "bin/packer_${PACKER_VERSION}_linux_amd64.zip" ]; then
             echo "Using local Packer zip..."
             unzip -q "bin/packer_${PACKER_VERSION}_linux_amd64.zip" -d ~/bin/
           else
-            echo "Downloading Packer (if this fails, include zip in repo)..."
+            echo "Downloading Packer..."
             curl -fsSL "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip" -o /tmp/packer.zip
             unzip -q /tmp/packer.zip -d ~/bin/
             rm /tmp/packer.zip
@@ -262,7 +206,6 @@ PYTHON_EOF
         run: |
           echo "=== Clearing AWS credential caches ==="
           rm -rf ~/.aws/cli/cache ~/.aws/sso/cache ~/.aws/credentials ~/.aws/config 2>/dev/null || true
-          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_DEFAULT_REGION AWS_REGION || true
           echo "✅ Caches cleared"
 
       - name: Configure AWS Credentials
@@ -282,7 +225,6 @@ PYTHON_EOF
           echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
           if [ -n "${{ secrets.AWS_SESSION_TOKEN }}" ] && [ -n "${SESSION_TOKEN}" ]; then
             echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
-            echo "✅ AWS SSO/temporary credentials detected"
           fi
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
@@ -316,120 +258,92 @@ PYTHON_EOF
         run: |
           echo "=== Installing cpio from local RPM file ==="
           
-          # Check if cpio is already available
           if command -v cpio >/dev/null 2>&1; then
             echo "✅ cpio is already available: $(cpio --version | head -1)"
             exit 0
           fi
           
-          # Look for cpio RPM in rpm directory
-          CPIO_RPM="rpm/cpio-*.rpm"
-          
-          if ! ls $CPIO_RPM 1> /dev/null 2>&1; then
+          if ! ls rpm/cpio-*.rpm 1> /dev/null 2>&1; then
             echo "❌ ERROR: cpio RPM not found in rpm/ directory"
-            echo ""
-            echo "Please download cpio RPM and add it to your repository:"
-            echo ""
-            echo "On a RHEL 9.6 machine with internet access, run:"
-            echo "  mkdir -p rpm"
-            echo "  dnf download cpio --downloaddir=rpm/"
-            echo "  git add rpm/cpio-*.rpm"
-            echo "  git commit -m 'Add cpio RPM for offline installation'"
-            echo "  git push"
-            echo ""
-            echo "Alternative: Download from RHEL mirror:"
-            echo "  https://vault.centos.org/9-stream/BaseOS/x86_64/os/Packages/"
-            echo "  Look for: cpio-2.13-*.el9.x86_64.rpm"
             exit 1
           fi
           
-          # Find the actual RPM file
           CPIO_RPM_FILE=$(ls rpm/cpio-*.rpm 2>/dev/null | head -1)
           echo "Found cpio RPM: $CPIO_RPM_FILE"
           
-          # Extract using Python
           echo "Extracting cpio RPM..."
           EXTRACT_DIR=$(mktemp -d)
-          PYTHON_SCRIPT=$(mktemp --suffix=.py)
           
-          cat > "$PYTHON_SCRIPT" << 'PYTHON_EOF'
-import sys
-import os
-import gzip
-import tarfile
-import io
-
-rpm_file = sys.argv[1]
-extract_dir = sys.argv[2]
-
-try:
-    with open(rpm_file, 'rb') as f:
-        # Read AR archive header
-        if f.read(8) != b'!<arch>\n':
-            print("Not an AR archive format")
-            sys.exit(1)
-        
-        while True:
-            header = f.read(60)
-            if len(header) < 60:
-                break
-            
-            if header[:2] == b'`\n':
-                continue
-            
-            name = header[:16].strip().decode('ascii', errors='ignore').rstrip('/')
-            try:
-                size = int(header[48:58].strip().decode('ascii', errors='ignore'))
-            except:
-                break
-            
-            if name.startswith('data.tar'):
-                print(f"Extracting {name}...")
-                data = f.read(size)
-                
-                for decompress in [gzip.decompress, lambda x: x]:
-                    try:
-                        decompressed = decompress(data)
-                        tar = tarfile.open(fileobj=io.BytesIO(decompressed))
-                        tar.extractall(extract_dir)
-                        print(f"✅ Extracted {len(tar.getmembers())} files")
-                        sys.exit(0)
-                    except:
-                        continue
-            else:
-                if size % 2:
-                    size += 1
-                f.seek(size, 1)
-    
-    print("❌ data.tar not found in RPM")
-    sys.exit(1)
-except Exception as e:
-    print(f"❌ Error: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-PYTHON_EOF
+          python3 - "$CPIO_RPM_FILE" "$EXTRACT_DIR" << 'PYTHON_SCRIPT'
+          import sys
+          import os
+          import gzip
+          import tarfile
+          import io
           
-          python3 "$PYTHON_SCRIPT" "$CPIO_RPM_FILE" "$EXTRACT_DIR"
-          PYTHON_EXIT=$?
-          rm -f "$PYTHON_SCRIPT"
+          rpm_file = sys.argv[1]
+          extract_dir = sys.argv[2]
           
-          if [ $PYTHON_EXIT -ne 0 ]; then
+          try:
+              with open(rpm_file, 'rb') as f:
+                  if f.read(8) != b'!<arch>\n':
+                      print("Not an AR archive format")
+                      sys.exit(1)
+                  
+                  while True:
+                      header = f.read(60)
+                      if len(header) < 60:
+                          break
+                      
+                      if header[:2] == b'`\n':
+                          continue
+                      
+                      name = header[:16].strip().decode('ascii', errors='ignore').rstrip('/')
+                      try:
+                          size = int(header[48:58].strip().decode('ascii', errors='ignore'))
+                      except:
+                          break
+                      
+                      if name.startswith('data.tar'):
+                          print(f"Extracting {name}...")
+                          data = f.read(size)
+                          
+                          for decompress in [gzip.decompress, lambda x: x]:
+                              try:
+                                  decompressed = decompress(data)
+                                  tar = tarfile.open(fileobj=io.BytesIO(decompressed))
+                                  tar.extractall(extract_dir)
+                                  print(f"Extracted {len(tar.getmembers())} files")
+                                  sys.exit(0)
+                              except:
+                                  continue
+                      else:
+                          if size % 2:
+                              size += 1
+                          f.seek(size, 1)
+              
+              print("data.tar not found in RPM")
+              sys.exit(1)
+          except Exception as e:
+              print(f"Error: {e}")
+              import traceback
+              traceback.print_exc()
+              sys.exit(1)
+          PYTHON_SCRIPT
+          
+          if [ $? -ne 0 ]; then
             echo "❌ Failed to extract RPM"
             exit 1
           fi
           
-          # Find and install cpio binary
           CPIO_BINARY=$(find "$EXTRACT_DIR" -path "*/bin/cpio" -type f | head -1)
           
           if [ -z "$CPIO_BINARY" ]; then
-            echo "⚠️  Looking for cpio in alternative locations..."
             CPIO_BINARY=$(find "$EXTRACT_DIR" -name "cpio" -type f -executable | head -1)
           fi
           
           if [ -z "$CPIO_BINARY" ]; then
             echo "❌ cpio binary not found"
-            echo "Extracted structure:"
             find "$EXTRACT_DIR" -type f | head -30
             exit 1
           fi
@@ -442,17 +356,6 @@ PYTHON_EOF
           echo "✅ cpio installed to ~/bin"
           
           rm -rf "$EXTRACT_DIR"
-
-      - name: Install other dependencies
-        run: |
-          echo "=== Installing dependencies ==="
-          if ! command -v jq >/dev/null 2>&1 && [ -f "bin/jq" ]; then
-            cp bin/jq ~/bin/jq
-            chmod +x ~/bin/jq
-          fi
-          
-          echo "=== Verification ==="
-          command -v cpio && echo "✅ cpio: $(cpio --version | head -1)" || { echo "❌ cpio: MISSING"; exit 1; }
 
       - name: Setup Packer
         run: |
@@ -476,7 +379,6 @@ PYTHON_EOF
       - name: Clear AWS credential caches
         run: |
           rm -rf ~/.aws/cli/cache ~/.aws/sso/cache ~/.aws/credentials ~/.aws/config 2>/dev/null || true
-          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_DEFAULT_REGION AWS_REGION || true
 
       - name: Configure AWS Credentials
         run: |
@@ -504,10 +406,7 @@ PYTHON_EOF
           LOCAL_RPM="rpm/session-manager-plugin.rpm"
           if [ ! -f "$LOCAL_RPM" ]; then
             echo "❌ ERROR: $LOCAL_RPM not found"
-            echo "Download it and add to your repo:"
-            echo "  curl -o rpm/session-manager-plugin.rpm https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
-            echo "  git add rpm/session-manager-plugin.rpm"
-            echo "  git commit -m 'Add Session Manager Plugin RPM'"
+            echo "Download it: curl -o rpm/session-manager-plugin.rpm https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
             exit 1
           fi
           
