@@ -950,11 +950,13 @@ jobs:
 
               # List contents of AR archive to find data.tar.* files
 
-              AR_LIST=$(ar t "$RPM_FILE" 2>/dev/null)
+              AR_LIST=$(ar t "$RPM_FILE" 2>&1)
 
-              if [ -n "$AR_LIST" ]; then
+              if [ $? -eq 0 ] && [ -n "$AR_LIST" ]; then
 
-                echo "  Found AR archive members: $AR_LIST"
+                echo "  Found AR archive members:"
+
+                echo "$AR_LIST" | sed 's/^/    /'
 
                 # Try to extract data.tar.* files
 
@@ -966,69 +968,111 @@ jobs:
 
                     # Extract the specific file from AR archive
 
-                    if ar p "$RPM_FILE" "$data_tar" > /tmp/"$data_tar" 2>/dev/null; then
+                    TEMP_TAR="/tmp/$(basename "$data_tar")"
+
+                    if ar p "$RPM_FILE" "$data_tar" > "$TEMP_TAR" 2>&1; then
+
+                      # Check if file was extracted and has content
+
+                      if [ ! -s "$TEMP_TAR" ]; then
+
+                        echo "    ⚠️  Extracted file is empty, trying next format..."
+
+                        rm -f "$TEMP_TAR"
+
+                        continue
+
+                      fi
+
+                      echo "    Extracted $data_tar ($(ls -lh "$TEMP_TAR" | awk '{print $5}'))"
 
                       # Try to extract tar archive based on compression
 
+                      TAR_SUCCESS=false
+
+                      TAR_ERROR=""
+
                       if [ "$data_tar" = "data.tar.gz" ]; then
 
-                        if tar -xzf /tmp/"$data_tar" -C "$EXTRACT_DIR" 2>/dev/null; then
+                        TAR_ERROR=$(tar -xzf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1)
 
-                          EXTRACTED=true
+                        if [ $? -eq 0 ]; then
+
+                          TAR_SUCCESS=true
 
                           echo "✅ Extraction successful using ar and tar (gzip)"
 
-                          rm -f /tmp/"$data_tar"
+                        else
 
-                          break
+                          echo "    ⚠️  tar -xzf failed: $TAR_ERROR"
 
                         fi
 
                       elif [ "$data_tar" = "data.tar.xz" ]; then
 
-                        if tar -xJf /tmp/"$data_tar" -C "$EXTRACT_DIR" 2>/dev/null; then
+                        TAR_ERROR=$(tar -xJf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1)
 
-                          EXTRACTED=true
+                        if [ $? -eq 0 ]; then
+
+                          TAR_SUCCESS=true
 
                           echo "✅ Extraction successful using ar and tar (xz)"
 
-                          rm -f /tmp/"$data_tar"
+                        else
 
-                          break
+                          echo "    ⚠️  tar -xJf failed: $TAR_ERROR"
 
                         fi
 
                       elif [ "$data_tar" = "data.tar.bz2" ]; then
 
-                        if tar -xjf /tmp/"$data_tar" -C "$EXTRACT_DIR" 2>/dev/null; then
+                        TAR_ERROR=$(tar -xjf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1)
 
-                          EXTRACTED=true
+                        if [ $? -eq 0 ]; then
+
+                          TAR_SUCCESS=true
 
                           echo "✅ Extraction successful using ar and tar (bzip2)"
 
-                          rm -f /tmp/"$data_tar"
+                        else
 
-                          break
+                          echo "    ⚠️  tar -xjf failed: $TAR_ERROR"
 
                         fi
 
                       elif [ "$data_tar" = "data.tar" ]; then
 
-                        if tar -xf /tmp/"$data_tar" -C "$EXTRACT_DIR" 2>/dev/null; then
+                        TAR_ERROR=$(tar -xf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1)
 
-                          EXTRACTED=true
+                        if [ $? -eq 0 ]; then
+
+                          TAR_SUCCESS=true
 
                           echo "✅ Extraction successful using ar and tar (uncompressed)"
 
-                          rm -f /tmp/"$data_tar"
+                        else
 
-                          break
+                          echo "    ⚠️  tar -xf failed: $TAR_ERROR"
 
                         fi
 
                       fi
 
-                      rm -f /tmp/"$data_tar"
+                      rm -f "$TEMP_TAR"
+
+                      if [ "$TAR_SUCCESS" = true ]; then
+
+                        EXTRACTED=true
+
+                        break
+
+                      fi
+
+                    else
+
+                      echo "    ⚠️  Failed to extract $data_tar from AR archive"
+
+                      rm -f "$TEMP_TAR"
 
                     fi
 
@@ -1040,11 +1084,17 @@ jobs:
 
                   echo "⚠️  ar/tar extraction failed - could not extract data.tar.* from AR archive"
 
+                  echo "   Extracted directory contents:"
+
+                  ls -la "$EXTRACT_DIR" 2>/dev/null || echo "   Directory is empty or doesn't exist"
+
                 fi
 
               else
 
                 echo "⚠️  Failed to list AR archive contents"
+
+                echo "   Error: $AR_LIST"
 
               fi
 
@@ -1106,37 +1156,58 @@ jobs:
               exit 1
             fi
 
-              # Find the extracted binary
+            # Verify extraction and find the extracted binary
+            echo "Verifying extracted contents..."
+            echo "  Extract directory: $EXTRACT_DIR"
+            echo "  Contents:"
+            ls -la "$EXTRACT_DIR" 2>/dev/null | head -20 | sed 's/^/    /' || echo "    (empty)"
+            echo "  Searching for session-manager-plugin binary..."
+            find "$EXTRACT_DIR" -name "session-manager-plugin" -type f 2>/dev/null | sed 's/^/    /' || echo "    (not found)"
 
-              if [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
+            # Find the extracted binary (check common locations)
+            BINARY_PATH=""
+            if [ -f "$EXTRACT_DIR/usr/local/sessionmanagerplugin/bin/session-manager-plugin" ]; then
+              BINARY_PATH="$EXTRACT_DIR/usr/local/sessionmanagerplugin/bin/session-manager-plugin"
+            elif [ -f "$EXTRACT_DIR/usr/local/bin/session-manager-plugin" ]; then
+              BINARY_PATH="$EXTRACT_DIR/usr/local/bin/session-manager-plugin"
+            else
+              # Try to find it anywhere in the extracted directory
+              BINARY_PATH=$(find "$EXTRACT_DIR" -name "session-manager-plugin" -type f 2>/dev/null | head -1)
+            fi
 
-                # Copy to user bin directory (no sudo required)
+            if [ -n "$BINARY_PATH" ] && [ -f "$BINARY_PATH" ]; then
 
-                cp usr/local/sessionmanagerplugin/bin/session-manager-plugin "$PLUGIN_BIN_DIR/"
+              echo "  Found binary at: $BINARY_PATH"
 
-                # Make executable
+              # Copy to user bin directory (no sudo required)
 
-                chmod +x "$PLUGIN_BIN_DIR/session-manager-plugin"
+              cp "$BINARY_PATH" "$PLUGIN_BIN_DIR/"
 
-                INSTALLED=true
+              # Make executable
 
-                echo "✅ Extracted and installed to ~/bin/"
+              chmod +x "$PLUGIN_BIN_DIR/session-manager-plugin"
 
-              else
+              INSTALLED=true
 
-                echo "❌ Failed to find extracted binary after extraction"
+              echo "✅ Extracted and installed to ~/bin/"
 
-                echo "   Checking extracted contents..."
+            else
 
-                find . -name "session-manager-plugin" -type f 2>/dev/null || echo "   Binary not found"
+              echo "❌ Failed to find extracted binary after extraction"
 
-                echo "   Listing extracted files:"
+              echo "   Extract directory: $EXTRACT_DIR"
 
-                ls -la usr/local/sessionmanagerplugin/bin/ 2>/dev/null || echo "   Directory not found"
+              echo "   Directory structure:"
 
-                exit 1
+              find "$EXTRACT_DIR" -type f 2>/dev/null | head -20 | sed 's/^/     /' || echo "     (no files found)"
 
-              fi
+              echo "   Directory tree (first 3 levels):"
+
+              find "$EXTRACT_DIR" -maxdepth 3 -type d 2>/dev/null | sed 's/^/     /' || echo "     (no directories found)"
+
+              exit 1
+
+            fi
 
               # Clean up extraction directory
 
