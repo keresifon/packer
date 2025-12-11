@@ -58,7 +58,7 @@ env:
 
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
 
-  PKR_VAR_security_group_ids: ${{ vars.SECURITY_GROUP_IDS || '' }}
+  PKR_VAR_security_group_ids: ${{ vars.SECURITY_GROUP_IDS || '[]' }}
 
  
 
@@ -382,7 +382,19 @@ jobs:
 
       - name: Initialize Packer
 
-        run: packer init aws-golden-image.pkr.hcl
+        run: |
+
+          # Set PKR_VAR_security_group_ids to JSON empty array if empty
+
+          # Packer expects list variables in JSON format, not empty strings
+
+          if [ -z "${{ env.PKR_VAR_security_group_ids }}" ] || [ "${{ env.PKR_VAR_security_group_ids }}" == "" ]; then
+
+            export PKR_VAR_security_group_ids="[]"
+
+          fi
+
+          packer init aws-golden-image.pkr.hcl
 
  
 
@@ -660,7 +672,19 @@ jobs:
 
       - name: Initialize Packer
 
-        run: packer init aws-golden-image.pkr.hcl
+        run: |
+
+          # Set PKR_VAR_security_group_ids to JSON empty array if empty
+
+          # Packer expects list variables in JSON format, not empty strings
+
+          if [ -z "${{ env.PKR_VAR_security_group_ids }}" ] || [ "${{ env.PKR_VAR_security_group_ids }}" == "" ]; then
+
+            export PKR_VAR_security_group_ids="[]"
+
+          fi
+
+          packer init aws-golden-image.pkr.hcl
 
  
 
