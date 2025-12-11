@@ -380,9 +380,11 @@ build {
 
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
 
-      "$${SUDO} dnf update -y",
+      "# Update system packages (use --allowerasing to handle curl-minimal conflicts)",
 
-      "$${SUDO} dnf upgrade -y",
+      "$${SUDO} dnf update -y --allowerasing",
+
+      "$${SUDO} dnf upgrade -y --allowerasing",
 
       "$${SUDO} dnf clean all"
 
@@ -404,7 +406,9 @@ build {
 
       "# Install common utilities",
 
-      "$${SUDO} dnf install -y curl wget git unzip",
+      "# Note: curl-minimal is pre-installed in Amazon Linux 2023, use --allowerasing to replace with full curl",
+
+      "$${SUDO} dnf install -y --allowerasing curl wget git unzip",
 
       "$${SUDO} dnf install -y htop net-tools",
 
