@@ -878,12 +878,6 @@ jobs:
 
       - name: Build Packer image
 
-        env:
-
-          # Only set PKR_VAR_security_group_ids if it has a value to avoid Packer parsing errors
-
-          PKR_VAR_security_group_ids: ${{ vars.SECURITY_GROUP_IDS != '' && vars.SECURITY_GROUP_IDS || '' }}
-
         run: |
 
           PACKER_BUILD_CMD="packer build \
@@ -922,11 +916,15 @@ jobs:
 
           # Add security group IDs if provided (comma-separated string converted to JSON array)
 
-          if [ -n "${PKR_VAR_security_group_ids}" ]; then
+          # Note: We read directly from vars.SECURITY_GROUP_IDS to avoid Packer parsing env vars
+
+          SECURITY_GROUP_IDS="${{ vars.SECURITY_GROUP_IDS }}"
+
+          if [ -n "$SECURITY_GROUP_IDS" ] && [ "$SECURITY_GROUP_IDS" != "" ]; then
 
             # Convert comma-separated string to JSON array format
 
-            SG_IDS="${PKR_VAR_security_group_ids}"
+            SG_IDS="$SECURITY_GROUP_IDS"
 
             # Remove spaces and create JSON array
 
@@ -934,7 +932,7 @@ jobs:
 
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"security_group_ids=$SG_JSON\""
 
-            echo "Using Security Group IDs: ${PKR_VAR_security_group_ids}"
+            echo "Using Security Group IDs: $SECURITY_GROUP_IDS"
 
           fi
 
