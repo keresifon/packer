@@ -676,17 +676,191 @@ jobs:
 
             echo "Installing Session Manager Plugin..."
 
-            # Download Session Manager Plugin for Linux
+            # Download Session Manager Plugin for Linux with retry logic and fallback methods
 
             PLUGIN_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
 
-            curl -f -o /tmp/session-manager-plugin.rpm "$PLUGIN_URL" || {
+            MAX_RETRIES=5
 
-              echo "❌ Failed to download Session Manager Plugin"
+            RETRY_DELAY=5
+
+            DOWNLOAD_SUCCESS=false
+
+            # Function to download using curl
+
+            download_with_curl() {
+
+              local url=$1
+
+              local output=$2
+
+              local http_code
+
+              http_code=$(curl -s -o "$output" -w "%{http_code}" --connect-timeout 10 --max-time 60 --fail --location "$url" 2>/dev/null)
+
+              echo "$http_code"
+
+            }
+
+            # Function to download using wget
+
+            download_with_wget() {
+
+              local url=$1
+
+              local output=$2
+
+              if wget --timeout=60 --tries=1 -O "$output" "$url" 2>/dev/null; then
+
+                echo "200"
+
+              else
+
+                echo "000"
+
+              fi
+
+            }
+
+            # Try curl first, then wget as fallback
+
+            for i in $(seq 1 $MAX_RETRIES); do
+
+              echo "Download attempt $i of $MAX_RETRIES..."
+
+              HTTP_CODE="000"
+
+              # Try curl first
+
+              if command -v curl >/dev/null 2>&1; then
+
+                echo "  Trying curl..."
+
+                HTTP_CODE=$(download_with_curl "$PLUGIN_URL" /tmp/session-manager-plugin.rpm)
+
+              fi
+
+              # If curl failed or returned error code, try wget
+
+              if [ "$HTTP_CODE" != "200" ] && command -v wget >/dev/null 2>&1; then
+
+                echo "  curl failed (HTTP $HTTP_CODE), trying wget..."
+
+                HTTP_CODE=$(download_with_wget "$PLUGIN_URL" /tmp/session-manager-plugin.rpm)
+
+              fi
+
+              # Check if download was successful
+
+              if [ "$HTTP_CODE" = "200" ]; then
+
+                # Verify the file was downloaded and is not empty
+
+                if [ -s /tmp/session-manager-plugin.rpm ]; then
+
+                  echo "✅ Download successful (HTTP $HTTP_CODE)"
+
+                  DOWNLOAD_SUCCESS=true
+
+                  break
+
+                else
+
+                  echo "⚠️  Downloaded file is empty, retrying..."
+
+                  rm -f /tmp/session-manager-plugin.rpm
+
+                  HTTP_CODE="000"
+
+                fi
+
+              fi
+
+              # Handle different error codes
+
+              if [ "$HTTP_CODE" = "503" ]; then
+
+                echo "⚠️  Received 503 (Service Unavailable), retrying in ${RETRY_DELAY}s..."
+
+              elif [ "$HTTP_CODE" = "000" ]; then
+
+                echo "⚠️  Network/connection error, retrying in ${RETRY_DELAY}s..."
+
+              elif [ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "200" ]; then
+
+                echo "⚠️  HTTP $HTTP_CODE error, retrying in ${RETRY_DELAY}s..."
+
+              else
+
+                echo "⚠️  Unknown error, retrying in ${RETRY_DELAY}s..."
+
+              fi
+
+              # Wait before retry (except on last attempt)
+
+              if [ $i -lt $MAX_RETRIES ]; then
+
+                sleep $RETRY_DELAY
+
+                RETRY_DELAY=$((RETRY_DELAY * 2))
+
+              fi
+
+            done
+
+            if [ "$DOWNLOAD_SUCCESS" = false ]; then
+
+              echo "❌ Failed to download Session Manager Plugin after $MAX_RETRIES attempts"
+
+              echo "   URL: $PLUGIN_URL"
+
+              echo "   Last HTTP code: $HTTP_CODE"
+
+              echo "   Available tools:"
+
+              command -v curl >/dev/null 2>&1 && echo "   - curl: yes" || echo "   - curl: no"
+
+              command -v wget >/dev/null 2>&1 && echo "   - wget: yes" || echo "   - wget: no"
+
+              echo "   This may be a temporary AWS S3 issue or network connectivity problem."
+
+              echo "   Please check:"
+
+              echo "   1. Network connectivity from the runner"
+
+              echo "   2. AWS S3 service status"
+
+              echo "   3. Firewall/proxy settings"
 
               exit 1
 
-            }
+            fi
+
+            # Verify downloaded file is a valid RPM
+
+            echo "Verifying downloaded RPM file..."
+
+            if ! file /tmp/session-manager-plugin.rpm | grep -q "RPM"; then
+
+              # Check if it's an AR archive (RPMs are AR archives)
+
+              if ! file /tmp/session-manager-plugin.rpm | grep -qE "(RPM|AR|archive)"; then
+
+                echo "❌ Downloaded file does not appear to be a valid RPM package"
+
+                echo "   File type: $(file /tmp/session-manager-plugin.rpm)"
+
+                echo "   File size: $(ls -lh /tmp/session-manager-plugin.rpm | awk '{print $5}')"
+
+                rm -f /tmp/session-manager-plugin.rpm
+
+                exit 1
+
+              fi
+
+            fi
+
+            echo "✅ RPM file validated"
 
             # Extract RPM manually (doesn't require RPM database or sudo)
 
