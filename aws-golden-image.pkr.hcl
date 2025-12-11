@@ -380,9 +380,11 @@ build {
 
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
 
-      "$${SUDO} dnf update -y",
+      "# Update system packages (use --allowerasing to handle curl-minimal conflicts)",
 
-      "$${SUDO} dnf upgrade -y",
+      "$${SUDO} dnf update -y --allowerasing",
+
+      "$${SUDO} dnf upgrade -y --allowerasing",
 
       "$${SUDO} dnf clean all"
 
@@ -404,19 +406,43 @@ build {
 
       "# Install common utilities",
 
-      "$${SUDO} dnf install -y curl wget git unzip",
+      "# Note: curl-minimal is pre-installed in Amazon Linux 2023, use --allowerasing to replace with full curl",
+
+      "$${SUDO} dnf install -y --allowerasing curl wget git unzip",
 
       "$${SUDO} dnf install -y htop net-tools",
 
-      "# Install AWS CLI v2 using official installer",
+      "# AWS CLI installation skipped - install manually after instance launch",
 
-      "curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"/tmp/awscliv2.zip\"",
+      "# For private subnets without internet access, AWS CLI can be installed later via:",
 
-      "unzip -q /tmp/awscliv2.zip -d /tmp",
+      "#   1. NAT Gateway (if configured)",
 
-      "$${SUDO} /tmp/aws/install",
+      "#   2. S3 VPC Gateway endpoint (download installer from S3)",
 
-      "rm -rf /tmp/aws /tmp/awscliv2.zip",
+      "#   3. Manual installation after instance launch with internet access",
+
+      "#",
+
+      "# To install AWS CLI v2 manually:",
+
+      "#   curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"/tmp/awscliv2.zip\"",
+
+      "#   unzip /tmp/awscliv2.zip -d /tmp",
+
+      "#   sudo /tmp/aws/install",
+
+      "#   rm -rf /tmp/aws /tmp/awscliv2.zip",
+
+      "if command -v aws >/dev/null 2>&1; then",
+
+      "  echo 'AWS CLI already installed: $(aws --version 2>/dev/null || echo unknown)'",
+
+      "else",
+
+      "  echo 'AWS CLI will be installed manually after instance launch'",
+
+      "fi",
 
       "# Install jq",
 

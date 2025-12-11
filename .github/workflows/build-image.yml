@@ -914,25 +914,45 @@ jobs:
 
           fi
 
-          # Add security group IDs if provided (comma-separated string converted to JSON array)
+          # Add security group IDs if provided (comma-separated string converted to HCL list)
 
           # Note: We read directly from vars.SECURITY_GROUP_IDS to avoid Packer parsing env vars
+
+          # Packer expects HCL list syntax: ["sg-123","sg-456"]
 
           SECURITY_GROUP_IDS="${{ vars.SECURITY_GROUP_IDS }}"
 
           if [ -n "$SECURITY_GROUP_IDS" ] && [ "$SECURITY_GROUP_IDS" != "" ]; then
 
-            # Convert comma-separated string to JSON array format
+            # Convert comma-separated string to HCL list format
+
+            # Split by comma, trim spaces, wrap each in quotes, join with commas, wrap in brackets
 
             SG_IDS="$SECURITY_GROUP_IDS"
 
-            # Remove spaces and create JSON array
+            # Create HCL list format: ["sg-123","sg-456"]
 
-            SG_JSON=$(echo "$SG_IDS" | tr ',' '\n' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//' | sed 's/^/[/;s/$/]/')
+            # Process each security group ID
 
-            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"security_group_ids=$SG_JSON\""
+            SG_HCL=$(echo "$SG_IDS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//' | sed 's/^/[/;s/$/]/')
+
+            # Write to a temporary var file to avoid shell quoting issues
+
+            # Packer requires var files to have .hcl or .json extension
+
+            VAR_FILE=$(mktemp --suffix=.hcl)
+
+            echo "security_group_ids = $SG_HCL" > "$VAR_FILE"
+
+            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var-file=$VAR_FILE"
 
             echo "Using Security Group IDs: $SECURITY_GROUP_IDS"
+
+            echo "HCL format: $SG_HCL"
+
+            echo "Var file content:"
+
+            cat "$VAR_FILE"
 
           fi
 
