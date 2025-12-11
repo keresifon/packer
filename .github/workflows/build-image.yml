@@ -686,49 +686,89 @@ jobs:
 
             cd /tmp
 
-            # Extract RPM using rpm2cpio (doesn't require RPM database)
+            EXTRACTED=false
+
+            # Method 1: Try rpm2cpio and cpio (preferred method)
 
             if command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then
 
-              echo "Extracting RPM package..."
+              echo "Extracting RPM package using rpm2cpio..."
 
               rpm2cpio session-manager-plugin.rpm | cpio -idmv 2>/dev/null
 
-              # Find the extracted binary
+              EXTRACTED=true
 
-              if [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
+            # Method 2: Try ar and tar (alternative method - RPM files are AR archives)
 
-                # Create user bin directory if it doesn't exist
+            elif command -v ar >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
 
-                mkdir -p ~/bin
+              echo "Extracting RPM package using ar and tar..."
 
-                # Copy to user bin directory (no sudo required)
+              # RPM files are AR archives containing compressed tar files
 
-                cp usr/local/sessionmanagerplugin/bin/session-manager-plugin ~/bin/
+              ar p session-manager-plugin.rpm data.tar.gz 2>/dev/null | tar -xz 2>/dev/null || \
 
-                # Add to PATH for current session
+              ar p session-manager-plugin.rpm data.tar.xz 2>/dev/null | tar -xJ 2>/dev/null || \
 
-                export PATH="$HOME/bin:$PATH"
+              ar p session-manager-plugin.rpm data.tar.bz2 2>/dev/null | tar -xj 2>/dev/null || \
 
-                echo "✅ Installed to ~/bin/"
+              ar p session-manager-plugin.rpm data.tar 2>/dev/null | tar -x 2>/dev/null
 
-                # Make executable
-
-                chmod +x ~/bin/session-manager-plugin
-
-              else
-
-                echo "❌ Failed to find extracted binary"
-
-                exit 1
-
-              fi
+              EXTRACTED=true
 
             else
 
-              echo "❌ rpm2cpio or cpio not available, cannot extract RPM"
+              echo "❌ No extraction tools available (rpm2cpio/cpio or ar/tar)"
 
-              echo "   Please install rpm2cpio and cpio packages"
+              echo "   Attempting to install rpm2cpio and cpio..."
+
+              # Try to install without sudo (may not work, but worth trying)
+
+              if command -v dnf >/dev/null 2>&1; then
+
+                echo "   Note: dnf install requires sudo, which is not available"
+
+              fi
+
+              echo "   Please ensure one of the following is available:"
+
+              echo "   - rpm2cpio and cpio"
+
+              echo "   - ar and tar"
+
+              exit 1
+
+            fi
+
+            # Find the extracted binary
+
+            if [ "$EXTRACTED" = true ] && [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
+
+              # Create user bin directory if it doesn't exist
+
+              mkdir -p ~/bin
+
+              # Copy to user bin directory (no sudo required)
+
+              cp usr/local/sessionmanagerplugin/bin/session-manager-plugin ~/bin/
+
+              # Add to PATH for current session
+
+              export PATH="$HOME/bin:$PATH"
+
+              echo "✅ Installed to ~/bin/"
+
+              # Make executable
+
+              chmod +x ~/bin/session-manager-plugin
+
+            elif [ "$EXTRACTED" = true ]; then
+
+              echo "❌ Failed to find extracted binary after extraction"
+
+              echo "   Checking extracted contents..."
+
+              find . -name "session-manager-plugin" -type f 2>/dev/null || echo "   Binary not found"
 
               exit 1
 
