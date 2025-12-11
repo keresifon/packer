@@ -1,4 +1,4 @@
-name: Build Amazon Linux 2023 Golden Image
+name: Build Ubuntu Golden Image
 
  
 
@@ -382,13 +382,13 @@ jobs:
 
       - name: Initialize Packer
 
-        run: packer init aws-golden-image.pkr.hcl
+        run: packer init ubuntu-golden-image.pkr.hcl
 
  
 
       - name: Validate Packer template
 
-        run: packer validate aws-golden-image.pkr.hcl
+        run: packer validate ubuntu-golden-image.pkr.hcl
 
  
 
@@ -660,7 +660,7 @@ jobs:
 
       - name: Initialize Packer
 
-        run: packer init aws-golden-image.pkr.hcl
+        run: packer init ubuntu-golden-image.pkr.hcl
 
  
 
@@ -956,7 +956,7 @@ jobs:
 
           fi
 
-          PACKER_BUILD_CMD="${PACKER_BUILD_CMD} aws-golden-image.pkr.hcl"
+          PACKER_BUILD_CMD="${PACKER_BUILD_CMD} ubuntu-golden-image.pkr.hcl"
 
           eval $PACKER_BUILD_CMD
 

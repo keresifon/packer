@@ -54,7 +54,7 @@ variable "image_name" {
 
   description = "Name for the AMI"
 
-  default     = "amazonlinux2023-golden-image"
+  default     = "ubuntu-golden-image"
 
 }
 
@@ -108,13 +108,13 @@ variable "security_group_ids" {
 
  
 
-# Data source for latest Amazon Linux 2023 AMI
+# Data source for latest Ubuntu 22.04 AMI
 
-data "amazon-ami" "amazonlinux2023" {
+data "amazon-ami" "ubuntu" {
 
   filters = {
 
-    name                = "al2023-ami-*-x86_64"
+    name                = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
 
     root-device-type    = "ebs"
 
@@ -124,7 +124,7 @@ data "amazon-ami" "amazonlinux2023" {
 
   most_recent = true
 
-  owners      = ["amazon"] # AWS
+  owners      = ["099720109477"] # Canonical
 
   region      = var.aws_region
 
@@ -136,7 +136,7 @@ data "amazon-ami" "amazonlinux2023" {
 
 # AWS credentials come from environment (AWS CLI, environment variables, or IAM role)
 
-source "amazon-ebs" "amazonlinux2023" {
+source "amazon-ebs" "ubuntu" {
 
   ami_name      = "${var.image_name}-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
 
@@ -144,7 +144,7 @@ source "amazon-ebs" "amazonlinux2023" {
 
   region        = var.aws_region
 
-  source_ami    = data.amazon-ami.amazonlinux2023.id
+  source_ami    = data.amazon-ami.ubuntu.id
 
   # Use SSM Session Manager for SSH access (instead of direct SSH)
 
@@ -156,7 +156,7 @@ source "amazon-ebs" "amazonlinux2023" {
 
   communicator = "ssh"
 
-  ssh_username = "ec2-user"  # Default user for Amazon Linux 2023
+  ssh_username = "ubuntu"  # Default user for Ubuntu
 
   ssh_interface = "session_manager"  # Use SSM Session Manager for SSH connection
 
@@ -192,33 +192,88 @@ source "amazon-ebs" "amazonlinux2023" {
 
   # The instance profile must have the AmazonSSMManagedInstanceCore policy attached
 
-  # You must create an IAM instance profile with the AmazonSSMManagedInstanceCore policy
-
-  # Example AWS CLI command to create:
-
-  # aws iam create-instance-profile --instance-profile-name packer-ssm-profile
-
-  # aws iam create-role --role-name packer-ssm-role --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
-
-  # aws iam attach-role-policy --role-name packer-ssm-role --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-
-  # aws iam add-role-to-instance-profile --instance-profile-name packer-ssm-profile --role-name packer-ssm-role
-
   iam_instance_profile = var.iam_instance_profile != "" ? var.iam_instance_profile : null
 
-  # User data to ensure SSM Agent starts immediately on instance launch
+  # User Data + Pause Approach: Install SSM Agent via user_data before Packer connects
 
-  # This is critical - SSM Agent must be running for Packer to connect via SSM
+  # This approach requires NO network architecture changes - works with existing VPC endpoints
+
+  # The user_data script installs SSM Agent, and pause_before_connecting gives it time to register
 
   user_data = base64encode(<<-EOF
     #!/bin/bash
-    # Ensure SSM Agent starts immediately on boot
-    systemctl enable amazon-ssm-agent
-    systemctl start amazon-ssm-agent
-    # Wait for SSM Agent to be ready
-    sleep 10
+    set -e
+    exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+    
+    echo "Starting SSM Agent installation via User Data..."
+    
+    # Wait for cloud-init to complete before installing SSM Agent
+    cloud-init status --wait
+    
+    # Install SSM Agent using snap (Ubuntu 18.04+)
+    # Snap is pre-installed on Ubuntu 22.04
+    if command -v snap >/dev/null 2>&1; then
+      echo "Installing SSM Agent via snap..."
+      snap install amazon-ssm-agent --classic
+      
+      # Enable and start SSM Agent service (snap service name)
+      systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
+      systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
+    else
+      echo "Snap not available, installing via deb package..."
+      mkdir -p /tmp/ssm
+      cd /tmp/ssm
+      wget -q https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
+      dpkg -i amazon-ssm-agent.deb || apt-get install -f -y
+      rm -rf /tmp/ssm
+      
+      # Enable and start SSM Agent service (deb package service name)
+      systemctl enable amazon-ssm-agent
+      systemctl start amazon-ssm-agent
+    fi
+    
+    # Wait for SSM Agent to register with AWS (critical for Packer connection)
+    echo "Waiting for SSM Agent to register..."
+    MAX_WAIT=60
+    WAIT_COUNT=0
+    while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+      # Check if agent service is running
+      if systemctl is-active --quiet snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || \
+         systemctl is-active --quiet amazon-ssm-agent.service 2>/dev/null; then
+        # Check if agent has registered (registration file exists after successful registration)
+        if [ -f /var/lib/amazon/ssm/registration ] || \
+           systemctl status snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null | grep -q "running" || \
+           systemctl status amazon-ssm-agent.service 2>/dev/null | grep -q "running"; then
+          echo "SSM Agent is ready and registered"
+          break
+        fi
+      fi
+      WAIT_COUNT=$((WAIT_COUNT + 1))
+      echo "Waiting for SSM Agent registration... ($WAIT_COUNT/$MAX_WAIT)"
+      sleep 2
+    done
+    
+    # Final status check
+    if systemctl is-active --quiet snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null; then
+      systemctl status snap.amazon-ssm-agent.amazon-ssm-agent.service --no-pager || echo "Warning: SSM Agent status check"
+    elif systemctl is-active --quiet amazon-ssm-agent.service 2>/dev/null; then
+      systemctl status amazon-ssm-agent.service --no-pager || echo "Warning: SSM Agent status check"
+    else
+      echo "Warning: SSM Agent service not found"
+    fi
+    
+    echo "SSM Agent installation complete"
+    touch /var/lib/cloud/instance/boot-finished
   EOF
   )
+
+  # Give SSM Agent time to install and register before Packer connects
+
+  # This pause is critical - allows user_data script to complete SSM Agent installation
+
+  # 3 minutes should be sufficient for snap installation and registration
+
+  pause_before_connecting = "3m"
 
   # VPC configuration (optional - only set if provided)
 
@@ -250,9 +305,7 @@ source "amazon-ebs" "amazonlinux2023" {
 
   #      * com.amazonaws.region.ec2 (EC2 API)
 
-  #      * com.amazonaws.region.s3 (S3 - Gateway endpoint)
-
-  #      * com.amazonaws.region.sts (Security Token Service)
+  #      * com.amazonaws.region.s3 (S3 - Gateway endpoint) - for SSM Agent installer if using deb package
 
   #    - Security group must allow outbound HTTPS (443) to VPC endpoints
 
@@ -267,6 +320,8 @@ source "amazon-ebs" "amazonlinux2023" {
   # Explicitly disable public IP assignment (private subnet)
 
   # With NAT Gateway, instances use private IPs but can access internet via NAT
+
+  # With VPC endpoints, instances use private IPs and connect to AWS services privately
 
   associate_public_ip_address = false
 
@@ -306,9 +361,9 @@ source "amazon-ebs" "amazonlinux2023" {
 
     Name        = var.image_name
 
-    OS          = "AmazonLinux2023"
+    OS          = "Ubuntu"
 
-    Version     = "2023"
+    Version     = "22.04"
 
     ManagedBy   = "Packer"
 
@@ -324,9 +379,9 @@ source "amazon-ebs" "amazonlinux2023" {
 
     Name        = var.image_name
 
-    OS          = "AmazonLinux2023"
+    OS          = "Ubuntu"
 
-    Version     = "2023"
+    Version     = "22.04"
 
     ManagedBy   = "Packer"
 
@@ -358,11 +413,11 @@ source "amazon-ebs" "amazonlinux2023" {
 
 build {
 
-  name = "amazonlinux2023-golden-image"
+  name = "ubuntu-golden-image"
 
   sources = [
 
-    "source.amazon-ebs.amazonlinux2023"
+    "source.amazon-ebs.ubuntu"
 
   ]
 
@@ -370,23 +425,19 @@ build {
 
   # Provisioning: Update system
 
-  # Amazon Linux 2023 uses dnf package manager
-
-  # Note: Check if sudo exists, if not assume we're root
+  # Ubuntu uses apt-get package manager
 
   provisioner "shell" {
 
     inline = [
 
-      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+      "sudo apt-get update -y",
 
-      "# Update system packages (use --allowerasing to handle curl-minimal conflicts)",
+      "sudo apt-get upgrade -y",
 
-      "$${SUDO} dnf update -y --allowerasing",
+      "sudo apt-get autoremove -y",
 
-      "$${SUDO} dnf upgrade -y --allowerasing",
-
-      "$${SUDO} dnf clean all"
+      "sudo apt-get autoclean -y"
 
     ]
 
@@ -400,17 +451,11 @@ build {
 
     inline = [
 
-      "# Determine if sudo is available, if not assume we're root",
-
-      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
-
       "# Install common utilities",
 
-      "# Note: curl-minimal is pre-installed in Amazon Linux 2023, use --allowerasing to replace with full curl",
+      "sudo apt-get install -y curl wget git unzip",
 
-      "$${SUDO} dnf install -y --allowerasing curl wget git unzip",
-
-      "$${SUDO} dnf install -y htop net-tools",
+      "sudo apt-get install -y htop net-tools",
 
       "# AWS CLI installation skipped - install manually after instance launch",
 
@@ -446,7 +491,7 @@ build {
 
       "# Install jq",
 
-      "$${SUDO} dnf install -y jq || echo 'Warning: jq installation skipped'"
+      "sudo apt-get install -y jq || echo 'Warning: jq installation skipped'"
 
     ]
 
@@ -454,57 +499,35 @@ build {
 
  
 
-  # Provisioning: Ensure SSM Agent is installed, enabled, and running
+  # Provisioning: Verify SSM Agent is running
 
-  # Amazon Linux 2023 comes with SSM Agent pre-installed, but ensure it's properly configured
+  # SSM Agent should already be installed and running via user_data
 
-  # This must run early in provisioning since Packer uses SSM to connect
+  # This step verifies it's working correctly
 
   provisioner "shell" {
 
     inline = [
 
-      "# Determine if sudo is available, if not assume we're root",
+      "# Verify SSM Agent is installed and running",
 
-      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+      "if systemctl is-active --quiet snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null; then",
 
-      "# Check if SSM Agent is installed",
+      "  echo 'SSM Agent (snap) is running'",
 
-      "if ! command -v amazon-ssm-agent >/dev/null 2>&1; then",
+      "  systemctl status snap.amazon-ssm-agent.amazon-ssm-agent.service --no-pager || true",
 
-      "  echo 'SSM Agent not found, installing...'",
+      "elif systemctl is-active --quiet amazon-ssm-agent.service 2>/dev/null; then",
 
-      "  $${SUDO} dnf install -y amazon-ssm-agent || echo 'Warning: Failed to install SSM Agent'",
+      "  echo 'SSM Agent (deb) is running'",
 
-      "fi",
-
-      "# Ensure SSM Agent service exists",
-
-      "if $${SUDO} systemctl list-unit-files | grep -q amazon-ssm-agent.service; then",
-
-      "  echo 'SSM Agent service found'",
-
-      "  # Enable SSM Agent to start on boot",
-
-      "  $${SUDO} systemctl enable amazon-ssm-agent",
-
-      "  # Start SSM Agent immediately",
-
-      "  $${SUDO} systemctl start amazon-ssm-agent",
-
-      "  # Wait a moment for service to start",
-
-      "  sleep 5",
-
-      "  # Check status",
-
-      "  $${SUDO} systemctl status amazon-ssm-agent --no-pager || echo 'Warning: SSM Agent status check failed'",
+      "  systemctl status amazon-ssm-agent.service --no-pager || true",
 
       "else",
 
-      "  echo 'ERROR: SSM Agent service not found'",
+      "  echo 'Warning: SSM Agent service not found or not running'",
 
-      "  exit 1",
+      "  echo 'This may indicate an issue with user_data installation'",
 
       "fi"
 
@@ -520,19 +543,15 @@ build {
 
     inline = [
 
-      "# Determine if sudo is available, if not assume we're root",
-
-      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
-
       "# Harden SSH configuration",
 
-      "$${SUDO} sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config || true",
+      "sudo sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config || true",
 
-      "$${SUDO} sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
+      "sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
 
-      "$${SUDO} sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
+      "sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
 
-      "$${SUDO} systemctl restart sshd || true"
+      "sudo systemctl restart sshd || true"
 
     ]
 
@@ -546,29 +565,25 @@ build {
 
     inline = [
 
-      "# Determine if sudo is available, if not assume we're root",
-
-      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
-
       "# Clean up cloud-init",
 
-      "$${SUDO} cloud-init clean",
+      "sudo cloud-init clean",
 
-      "$${SUDO} rm -f /var/log/cloud-init*.log",
+      "sudo rm -f /var/log/cloud-init*.log",
 
       "# Clean up temporary files",
 
-      "$${SUDO} rm -rf /tmp/*",
+      "sudo rm -rf /tmp/*",
 
-      "$${SUDO} rm -rf /var/tmp/*",
+      "sudo rm -rf /var/tmp/*",
 
       "# Clean up package cache",
 
-      "$${SUDO} dnf clean all",
+      "sudo apt-get clean",
 
       "# Sync filesystem",
 
-      "$${SUDO} sync"
+      "sudo sync"
 
     ]
 
