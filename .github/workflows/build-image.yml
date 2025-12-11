@@ -314,7 +314,18 @@ jobs:
             exit 1
           fi
           
-          CPIO_BINARY=$(find "$EXTRACT_DIR" -name "cpio" -type f -executable | head -1)
+          # Look for cpio binary - don't require executable bit as it may not be set yet
+          CPIO_BINARY=$(find "$EXTRACT_DIR" -path "*/usr/bin/cpio" -type f | head -1)
+          
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "Trying alternative path..."
+            CPIO_BINARY=$(find "$EXTRACT_DIR" -path "*/bin/cpio" -type f | head -1)
+          fi
+          
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "Trying name-based search..."
+            CPIO_BINARY=$(find "$EXTRACT_DIR" -name "cpio" -type f | head -1)
+          fi
           
           if [ -z "$CPIO_BINARY" ]; then
             echo "❌ cpio binary not found in extracted files"
