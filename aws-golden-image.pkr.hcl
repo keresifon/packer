@@ -406,9 +406,11 @@ build {
 
       "# Install common utilities",
 
-      "# Note: curl-minimal is pre-installed in Amazon Linux 2023, use --allowerasing to replace with full curl",
+      "# Note: curl-minimal is pre-installed in Amazon Linux 2023, remove it first to avoid conflicts",
 
-      "$${SUDO} dnf install -y --allowerasing curl wget git unzip",
+      "$${SUDO} dnf remove -y curl-minimal || true",
+
+      "$${SUDO} dnf install -y curl wget git unzip",
 
       "$${SUDO} dnf install -y htop net-tools",
 
