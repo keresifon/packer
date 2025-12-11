@@ -890,6 +890,11 @@ jobs:
 
             EXTRACTED=false
 
+            # Check and try to install cpio if rpm2cpio is available but cpio is missing
+            if command -v rpm2cpio >/dev/null 2>&1 && ! command -v cpio >/dev/null 2>&1; then
+              echo "rpm2cpio is available but cpio is missing, will use ar/tar method instead"
+            fi
+
             # Method 1: Try rpm2cpio and cpio (preferred method)
 
             if command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then
@@ -916,56 +921,162 @@ jobs:
 
               echo "Extracting RPM package using ar and tar..."
 
-              # Try different compression formats
+              # List contents of AR archive to find data.tar.* files
 
-              if ar p "$RPM_FILE" data.tar.gz 2>/dev/null | tar -xz 2>/dev/null; then
+              AR_LIST=$(ar t "$RPM_FILE" 2>/dev/null)
 
-                EXTRACTED=true
+              if [ -n "$AR_LIST" ]; then
 
-                echo "✅ Extraction successful using ar and tar (gzip)"
+                echo "  Found AR archive members: $AR_LIST"
 
-              elif ar p "$RPM_FILE" data.tar.xz 2>/dev/null | tar -xJ 2>/dev/null; then
+                # Try to extract data.tar.* files
 
-                EXTRACTED=true
+                for data_tar in data.tar.gz data.tar.xz data.tar.bz2 data.tar; do
 
-                echo "✅ Extraction successful using ar and tar (xz)"
+                  if echo "$AR_LIST" | grep -q "^${data_tar}$"; then
 
-              elif ar p "$RPM_FILE" data.tar.bz2 2>/dev/null | tar -xj 2>/dev/null; then
+                    echo "  Attempting to extract $data_tar..."
 
-                EXTRACTED=true
+                    # Extract the specific file from AR archive
 
-                echo "✅ Extraction successful using ar and tar (bzip2)"
+                    if ar p "$RPM_FILE" "$data_tar" > /tmp/"$data_tar" 2>/dev/null; then
 
-              elif ar p "$RPM_FILE" data.tar 2>/dev/null | tar -x 2>/dev/null; then
+                      # Try to extract tar archive based on compression
 
-                EXTRACTED=true
+                      if [ "$data_tar" = "data.tar.gz" ]; then
 
-                echo "✅ Extraction successful using ar and tar (uncompressed)"
+                        if tar -xzf /tmp/"$data_tar" -C "$EXTRACT_DIR" 2>/dev/null; then
+
+                          EXTRACTED=true
+
+                          echo "✅ Extraction successful using ar and tar (gzip)"
+
+                          rm -f /tmp/"$data_tar"
+
+                          break
+
+                        fi
+
+                      elif [ "$data_tar" = "data.tar.xz" ]; then
+
+                        if tar -xJf /tmp/"$data_tar" -C "$EXTRACT_DIR" 2>/dev/null; then
+
+                          EXTRACTED=true
+
+                          echo "✅ Extraction successful using ar and tar (xz)"
+
+                          rm -f /tmp/"$data_tar"
+
+                          break
+
+                        fi
+
+                      elif [ "$data_tar" = "data.tar.bz2" ]; then
+
+                        if tar -xjf /tmp/"$data_tar" -C "$EXTRACT_DIR" 2>/dev/null; then
+
+                          EXTRACTED=true
+
+                          echo "✅ Extraction successful using ar and tar (bzip2)"
+
+                          rm -f /tmp/"$data_tar"
+
+                          break
+
+                        fi
+
+                      elif [ "$data_tar" = "data.tar" ]; then
+
+                        if tar -xf /tmp/"$data_tar" -C "$EXTRACT_DIR" 2>/dev/null; then
+
+                          EXTRACTED=true
+
+                          echo "✅ Extraction successful using ar and tar (uncompressed)"
+
+                          rm -f /tmp/"$data_tar"
+
+                          break
+
+                        fi
+
+                      fi
+
+                      rm -f /tmp/"$data_tar"
+
+                    fi
+
+                  fi
+
+                done
+
+                if [ "$EXTRACTED" = false ]; then
+
+                  echo "⚠️  ar/tar extraction failed - could not extract data.tar.* from AR archive"
+
+                fi
 
               else
 
-                echo "⚠️  ar/tar extraction failed"
+                echo "⚠️  Failed to list AR archive contents"
 
               fi
 
             fi
 
+            # Method 3: Try Python-based extraction (fallback method)
+            if [ "$EXTRACTED" = false ] && command -v python3 >/dev/null 2>&1; then
+              echo "Extracting RPM package using Python..."
+              PYTHON_SCRIPT=$(mktemp)
+              printf 'import io, gzip, bz2, lzma, tarfile, sys\n' > "$PYTHON_SCRIPT"
+              printf 'rpm_file, extract_dir = sys.argv[1], sys.argv[2]\n' >> "$PYTHON_SCRIPT"
+              printf 'try:\n' >> "$PYTHON_SCRIPT"
+              printf '    with open(rpm_file, "rb") as f:\n' >> "$PYTHON_SCRIPT"
+              printf '        if f.read(8) != b"!<arch>\\n": sys.exit(1)\n' >> "$PYTHON_SCRIPT"
+              printf '        while True:\n' >> "$PYTHON_SCRIPT"
+              printf '            h = f.read(60)\n' >> "$PYTHON_SCRIPT"
+              printf '            if len(h) < 60: break\n' >> "$PYTHON_SCRIPT"
+              printf '            if h[:2] == b"`\\n": continue\n' >> "$PYTHON_SCRIPT"
+              printf '            name = h[:16].strip().decode("ascii", errors="ignore").rstrip("/")\n' >> "$PYTHON_SCRIPT"
+              printf '            try: size = int(h[48:58].strip().decode("ascii", errors="ignore"))\n' >> "$PYTHON_SCRIPT"
+              printf '            except: break\n' >> "$PYTHON_SCRIPT"
+              printf '            if name.startswith("data.tar"):\n' >> "$PYTHON_SCRIPT"
+              printf '                d = f.read(size)\n' >> "$PYTHON_SCRIPT"
+              printf '                for df in [gzip.decompress, bz2.decompress, lzma.decompress, lambda x: x]:\n' >> "$PYTHON_SCRIPT"
+              printf '                    try:\n' >> "$PYTHON_SCRIPT"
+              printf '                        with tarfile.open(fileobj=io.BytesIO(df(d))) as tar:\n' >> "$PYTHON_SCRIPT"
+              printf '                            tar.extractall(extract_dir)\n' >> "$PYTHON_SCRIPT"
+              printf '                        print("SUCCESS")\n' >> "$PYTHON_SCRIPT"
+              printf '                        sys.exit(0)\n' >> "$PYTHON_SCRIPT"
+              printf '                    except: pass\n' >> "$PYTHON_SCRIPT"
+              printf '                break\n' >> "$PYTHON_SCRIPT"
+              printf '            else:\n' >> "$PYTHON_SCRIPT"
+              printf '                if size %% 2: size += 1\n' >> "$PYTHON_SCRIPT"
+              printf '                f.seek(size, 1)\n' >> "$PYTHON_SCRIPT"
+              printf '        sys.exit(1)\n' >> "$PYTHON_SCRIPT"
+              printf 'except: sys.exit(1)\n' >> "$PYTHON_SCRIPT"
+              if python3 "$PYTHON_SCRIPT" "$RPM_FILE" "$EXTRACT_DIR" 2>/dev/null | grep -q "SUCCESS"; then
+                EXTRACTED=true
+                echo "✅ Extraction successful using Python"
+              else
+                echo "⚠️  Python extraction failed"
+              fi
+              rm -f "$PYTHON_SCRIPT"
+            fi
+
             if [ "$EXTRACTED" = false ]; then
-
               echo "❌ No extraction tools available or extraction failed"
-
               echo "   Available tools:"
-
               command -v rpm2cpio >/dev/null 2>&1 && echo "   - rpm2cpio: yes" || echo "   - rpm2cpio: no"
-
               command -v cpio >/dev/null 2>&1 && echo "   - cpio: yes" || echo "   - cpio: no"
-
               command -v ar >/dev/null 2>&1 && echo "   - ar: yes" || echo "   - ar: no"
-
               command -v tar >/dev/null 2>&1 && echo "   - tar: yes" || echo "   - tar: no"
-
+              command -v python3 >/dev/null 2>&1 && echo "   - python3: yes" || echo "   - python3: no"
+              echo ""
+              echo "   Please install one of the following:"
+              echo "   - rpm2cpio and cpio"
+              echo "   - ar and tar"
+              echo "   - python3 (with standard library)"
               exit 1
-
             fi
 
             # Find the extracted binary
