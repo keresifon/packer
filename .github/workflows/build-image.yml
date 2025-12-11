@@ -84,8 +84,9 @@ jobs:
           # Extract RPM using Python
           echo "Extracting cpio RPM using Python..."
           EXTRACT_DIR=$(mktemp -d)
+          PYTHON_SCRIPT=$(mktemp --suffix=.py)
           
-          python3 - "$CPIO_RPM_FILE" "$EXTRACT_DIR" << 'PYTHON_EOF'
+          cat > "$PYTHON_SCRIPT" << 'PYTHON_EOF'
 import sys
 import os
 import gzip
@@ -148,6 +149,12 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 PYTHON_EOF
+          
+          python3 "$PYTHON_SCRIPT" "$CPIO_RPM_FILE" "$EXTRACT_DIR"
+          PYTHON_EXIT=$?
+          rm -f "$PYTHON_SCRIPT"
+          
+          if [ $PYTHON_EXIT -ne 0 ]; then
           
           if [ $? -ne 0 ]; then
             echo "⚠️  Python extraction failed, trying alternative method..."
@@ -343,8 +350,9 @@ PYTHON_EOF
           # Extract using Python
           echo "Extracting cpio RPM..."
           EXTRACT_DIR=$(mktemp -d)
+          PYTHON_SCRIPT=$(mktemp --suffix=.py)
           
-          python3 - "$CPIO_RPM_FILE" "$EXTRACT_DIR" << 'PYTHON_EOF'
+          cat > "$PYTHON_SCRIPT" << 'PYTHON_EOF'
 import sys
 import os
 import gzip
@@ -402,7 +410,11 @@ except Exception as e:
     sys.exit(1)
 PYTHON_EOF
           
-          if [ $? -ne 0 ]; then
+          python3 "$PYTHON_SCRIPT" "$CPIO_RPM_FILE" "$EXTRACT_DIR"
+          PYTHON_EXIT=$?
+          rm -f "$PYTHON_SCRIPT"
+          
+          if [ $PYTHON_EXIT -ne 0 ]; then
             echo "❌ Failed to extract RPM"
             exit 1
           fi
