@@ -382,6 +382,10 @@ build {
 
       "# Update system packages (use --allowerasing to handle curl-minimal conflicts)",
 
+      "# Remove curl-minimal first to avoid conflicts during updates",
+
+      "$${SUDO} dnf remove -y curl-minimal 2>/dev/null || true",
+
       "$${SUDO} dnf update -y --allowerasing",
 
       "$${SUDO} dnf upgrade -y --allowerasing",
@@ -406,9 +410,7 @@ build {
 
       "# Install common utilities",
 
-      "# Note: curl-minimal is pre-installed in Amazon Linux 2023, remove it first to avoid conflicts",
-
-      "$${SUDO} dnf remove -y curl-minimal || true",
+      "# Note: curl-minimal was removed in the update step, now install full curl",
 
       "$${SUDO} dnf install -y curl wget git unzip",
 
