@@ -14,7 +14,7 @@ on:
 
         required: false
 
-        default: 'us-east-2'
+        default: 'us-east-1'
 
         type: string
 
@@ -50,7 +50,7 @@ on:
 
 env:
 
-  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-2' }}
+  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
 
   PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || github.event.inputs.iam_instance_profile || '' }}
 
@@ -68,7 +68,7 @@ jobs:
 
     name: Validate Packer Template
 
-    runs-on: rhel9.6
+    runs-on: terraform
 
     permissions:
 
@@ -398,7 +398,7 @@ jobs:
 
     needs: validate
 
-    runs-on: rhel9.6
+    runs-on: terraform
 
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
 
@@ -680,7 +680,13 @@ jobs:
 
             PLUGIN_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
 
-            curl -o /tmp/session-manager-plugin.rpm "$PLUGIN_URL"
+            curl -f -o /tmp/session-manager-plugin.rpm "$PLUGIN_URL" || {
+
+              echo "❌ Failed to download Session Manager Plugin"
+
+              exit 1
+
+            }
 
             # Extract RPM manually (doesn't require RPM database or sudo)
 
@@ -694,47 +700,73 @@ jobs:
 
               echo "Extracting RPM package using rpm2cpio..."
 
-              rpm2cpio session-manager-plugin.rpm | cpio -idmv 2>/dev/null
+              if rpm2cpio session-manager-plugin.rpm | cpio -idmv >/dev/null 2>&1; then
 
-              EXTRACTED=true
+                EXTRACTED=true
 
-            # Method 2: Try ar and tar (alternative method - RPM files are AR archives)
+                echo "✅ Extraction successful using rpm2cpio"
 
-            elif command -v ar >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
+              else
 
-              echo "Extracting RPM package using ar and tar..."
-
-              # RPM files are AR archives containing compressed tar files
-
-              ar p session-manager-plugin.rpm data.tar.gz 2>/dev/null | tar -xz 2>/dev/null || \
-
-              ar p session-manager-plugin.rpm data.tar.xz 2>/dev/null | tar -xJ 2>/dev/null || \
-
-              ar p session-manager-plugin.rpm data.tar.bz2 2>/dev/null | tar -xj 2>/dev/null || \
-
-              ar p session-manager-plugin.rpm data.tar 2>/dev/null | tar -x 2>/dev/null
-
-              EXTRACTED=true
-
-            else
-
-              echo "❌ No extraction tools available (rpm2cpio/cpio or ar/tar)"
-
-              echo "   Attempting to install rpm2cpio and cpio..."
-
-              # Try to install without sudo (may not work, but worth trying)
-
-              if command -v dnf >/dev/null 2>&1; then
-
-                echo "   Note: dnf install requires sudo, which is not available"
+                echo "⚠️  rpm2cpio extraction failed, trying alternative method..."
 
               fi
 
-              echo "   Please ensure one of the following is available:"
+            fi
 
-              echo "   - rpm2cpio and cpio"
+            # Method 2: Try ar and tar (alternative method - RPM files are AR archives)
 
-              echo "   - ar and tar"
+            if [ "$EXTRACTED" = false ] && command -v ar >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
+
+              echo "Extracting RPM package using ar and tar..."
+
+              # Try different compression formats
+
+              if ar p session-manager-plugin.rpm data.tar.gz 2>/dev/null | tar -xz 2>/dev/null; then
+
+                EXTRACTED=true
+
+                echo "✅ Extraction successful using ar and tar (gzip)"
+
+              elif ar p session-manager-plugin.rpm data.tar.xz 2>/dev/null | tar -xJ 2>/dev/null; then
+
+                EXTRACTED=true
+
+                echo "✅ Extraction successful using ar and tar (xz)"
+
+              elif ar p session-manager-plugin.rpm data.tar.bz2 2>/dev/null | tar -xj 2>/dev/null; then
+
+                EXTRACTED=true
+
+                echo "✅ Extraction successful using ar and tar (bzip2)"
+
+              elif ar p session-manager-plugin.rpm data.tar 2>/dev/null | tar -x 2>/dev/null; then
+
+                EXTRACTED=true
+
+                echo "✅ Extraction successful using ar and tar (uncompressed)"
+
+              else
+
+                echo "⚠️  ar/tar extraction failed"
+
+              fi
+
+            fi
+
+            if [ "$EXTRACTED" = false ]; then
+
+              echo "❌ No extraction tools available or extraction failed"
+
+              echo "   Available tools:"
+
+              command -v rpm2cpio >/dev/null 2>&1 && echo "   - rpm2cpio: yes" || echo "   - rpm2cpio: no"
+
+              command -v cpio >/dev/null 2>&1 && echo "   - cpio: yes" || echo "   - cpio: no"
+
+              command -v ar >/dev/null 2>&1 && echo "   - ar: yes" || echo "   - ar: no"
+
+              command -v tar >/dev/null 2>&1 && echo "   - tar: yes" || echo "   - tar: no"
 
               exit 1
 
@@ -742,7 +774,7 @@ jobs:
 
             # Find the extracted binary
 
-            if [ "$EXTRACTED" = true ] && [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
+            if [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
 
               # Create user bin directory if it doesn't exist
 
@@ -752,23 +784,23 @@ jobs:
 
               cp usr/local/sessionmanagerplugin/bin/session-manager-plugin ~/bin/
 
-              # Add to PATH for current session
-
-              export PATH="$HOME/bin:$PATH"
-
-              echo "✅ Installed to ~/bin/"
-
               # Make executable
 
               chmod +x ~/bin/session-manager-plugin
 
-            elif [ "$EXTRACTED" = true ]; then
+              echo "✅ Installed to ~/bin/"
+
+            else
 
               echo "❌ Failed to find extracted binary after extraction"
 
               echo "   Checking extracted contents..."
 
               find . -name "session-manager-plugin" -type f 2>/dev/null || echo "   Binary not found"
+
+              echo "   Listing extracted files:"
+
+              ls -la usr/local/sessionmanagerplugin/bin/ 2>/dev/null || echo "   Directory not found"
 
               exit 1
 
@@ -778,19 +810,23 @@ jobs:
 
             rm -rf /tmp/session-manager-plugin.rpm /tmp/usr 2>/dev/null || true
 
-            # Verify installation
+            # Verify installation (use full path since PATH might not be updated yet)
 
-            if command -v session-manager-plugin >/dev/null 2>&1; then
+            if [ -x ~/bin/session-manager-plugin ]; then
 
-              session-manager-plugin --version
+              ~/bin/session-manager-plugin --version
 
               echo "✅ Session Manager Plugin installed successfully"
+
+              # Add to PATH for subsequent steps
+
+              echo "$HOME/bin" >> $GITHUB_PATH
 
             else
 
               echo "❌ Failed to install Session Manager Plugin"
 
-              echo "   Plugin may not be in PATH"
+              echo "   Binary not found or not executable"
 
               exit 1
 
@@ -807,12 +843,6 @@ jobs:
  
 
       - name: Build Packer image
-
-        env:
-
-          # Ensure session-manager-plugin is in PATH
-
-          PATH: ${{ env.PATH }}:$HOME/bin
 
         run: |
 
