@@ -964,11 +964,26 @@ jobs:
 
               echo "Extracting RPM package using ar and tar..."
 
+              # Temporarily disable exit on error to capture detailed error messages
+
+              set +e
+
               # List contents of AR archive to find data.tar.* files
 
-              AR_LIST=$(ar t "$RPM_FILE" 2>&1)
+              AR_LIST=""
+              AR_ERROR=""
 
-              if [ $? -eq 0 ] && [ -n "$AR_LIST" ]; then
+              ar t "$RPM_FILE" > /tmp/ar_list.txt 2>/tmp/ar_error.txt
+
+              AR_EXIT_CODE=$?
+
+              set -e
+
+              if [ $AR_EXIT_CODE -eq 0 ]; then
+
+                AR_LIST=$(cat /tmp/ar_list.txt 2>/dev/null)
+
+                if [ -n "$AR_LIST" ]; then
 
                 echo "  Found AR archive members:"
 
@@ -1168,11 +1183,31 @@ jobs:
 
                 fi
 
+                else
+
+                  echo "⚠️  AR archive list is empty"
+
+                fi
+
+                rm -f /tmp/ar_list.txt /tmp/ar_error.txt 2>/dev/null || true
+
               else
+
+                AR_ERROR=$(cat /tmp/ar_error.txt 2>/dev/null || echo "Unknown error")
 
                 echo "⚠️  Failed to list AR archive contents"
 
-                echo "   Error: $AR_LIST"
+                echo "   ar t command failed"
+
+                echo "   Error output: $AR_ERROR"
+
+                echo "   RPM file: $RPM_FILE"
+
+                echo "   File exists: $([ -f "$RPM_FILE" ] && echo 'yes' || echo 'no')"
+
+                echo "   File size: $([ -f "$RPM_FILE" ] && ls -lh "$RPM_FILE" | awk '{print $5}' || echo 'N/A')"
+
+                rm -f /tmp/ar_list.txt /tmp/ar_error.txt 2>/dev/null || true
 
               fi
 
