@@ -58,7 +58,7 @@ env:
 
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
 
-  PKR_VAR_security_group_ids: ${{ vars.SECURITY_GROUP_IDS || '[]' }}
+  # PKR_VAR_security_group_ids is set conditionally in steps to avoid Packer parsing errors
 
  
 
@@ -382,19 +382,7 @@ jobs:
 
       - name: Initialize Packer
 
-        run: |
-
-          # Set PKR_VAR_security_group_ids to JSON empty array if empty
-
-          # Packer expects list variables in JSON format, not empty strings
-
-          if [ -z "${{ env.PKR_VAR_security_group_ids }}" ] || [ "${{ env.PKR_VAR_security_group_ids }}" == "" ]; then
-
-            export PKR_VAR_security_group_ids="[]"
-
-          fi
-
-          packer init aws-golden-image.pkr.hcl
+        run: packer init aws-golden-image.pkr.hcl
 
  
 
@@ -672,19 +660,7 @@ jobs:
 
       - name: Initialize Packer
 
-        run: |
-
-          # Set PKR_VAR_security_group_ids to JSON empty array if empty
-
-          # Packer expects list variables in JSON format, not empty strings
-
-          if [ -z "${{ env.PKR_VAR_security_group_ids }}" ] || [ "${{ env.PKR_VAR_security_group_ids }}" == "" ]; then
-
-            export PKR_VAR_security_group_ids="[]"
-
-          fi
-
-          packer init aws-golden-image.pkr.hcl
+        run: packer init aws-golden-image.pkr.hcl
 
  
 
@@ -902,6 +878,12 @@ jobs:
 
       - name: Build Packer image
 
+        env:
+
+          # Only set PKR_VAR_security_group_ids if it has a value to avoid Packer parsing errors
+
+          PKR_VAR_security_group_ids: ${{ vars.SECURITY_GROUP_IDS != '' && vars.SECURITY_GROUP_IDS || '' }}
+
         run: |
 
           PACKER_BUILD_CMD="packer build \
@@ -940,11 +922,11 @@ jobs:
 
           # Add security group IDs if provided (comma-separated string converted to JSON array)
 
-          if [ -n "${{ env.PKR_VAR_security_group_ids }}" ]; then
+          if [ -n "${PKR_VAR_security_group_ids}" ]; then
 
             # Convert comma-separated string to JSON array format
 
-            SG_IDS="${{ env.PKR_VAR_security_group_ids }}"
+            SG_IDS="${PKR_VAR_security_group_ids}"
 
             # Remove spaces and create JSON array
 
@@ -952,7 +934,7 @@ jobs:
 
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"security_group_ids=$SG_JSON\""
 
-            echo "Using Security Group IDs: ${{ env.PKR_VAR_security_group_ids }}"
+            echo "Using Security Group IDs: ${PKR_VAR_security_group_ids}"
 
           fi
 
