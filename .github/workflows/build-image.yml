@@ -262,12 +262,22 @@ jobs:
       - name: Install cpio from local RPM
         run: |
           if command -v cpio >/dev/null 2>&1; then
+            echo "✅ cpio already installed"
             cpio --version | head -1
             exit 0
           fi
+          
+          echo "Installing cpio from RPM..."
           CPIO_RPM_FILE=$(ls rpm/cpio-*.rpm 2>/dev/null | head -1)
+          
+          if [ -z "$CPIO_RPM_FILE" ]; then
+            echo "❌ cpio RPM not found"
+            exit 1
+          fi
+          
           rpm2cpio "$CPIO_RPM_FILE" > /tmp/cpio_archive.cpio
           EXTRACT_DIR=$(mktemp -d)
+          
           cat > /tmp/ex.py <<'PYE'
           import sys,os
           c,e=sys.argv[1],sys.argv[2]
@@ -293,12 +303,38 @@ jobs:
           with open(c,'rb') as ff:d=ff.read()
           print(f"Extracted {p(d)} files");sys.exit(0)
           PYE
+          
           python3 /tmp/ex.py /tmp/cpio_archive.cpio "$EXTRACT_DIR"
-          rm /tmp/cpio_archive.cpio /tmp/ex.py
+          EXTRACT_EXIT=$?
+          rm -f /tmp/cpio_archive.cpio /tmp/ex.py
+          
+          if [ $EXTRACT_EXIT -ne 0 ]; then
+            echo "❌ Extraction failed"
+            rm -rf "$EXTRACT_DIR"
+            exit 1
+          fi
+          
           CPIO_BINARY=$(find "$EXTRACT_DIR" -name "cpio" -type f -executable | head -1)
+          
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "❌ cpio binary not found in extracted files"
+            echo "Extract directory contents:"
+            find "$EXTRACT_DIR" -type f | head -20
+            rm -rf "$EXTRACT_DIR"
+            exit 1
+          fi
+          
+          echo "Found cpio: $CPIO_BINARY"
           cp "$CPIO_BINARY" ~/bin/cpio
           chmod +x ~/bin/cpio
-          ~/bin/cpio --version
+          
+          if ~/bin/cpio --version; then
+            echo "✅ cpio installed successfully"
+          else
+            echo "❌ cpio installation verification failed"
+            exit 1
+          fi
+          
           rm -rf "$EXTRACT_DIR"
 
       - name: Setup Packer
