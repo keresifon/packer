@@ -918,7 +918,23 @@ jobs:
 
               EXTRACT_DIR=$(mktemp -d)
 
-              cd "$EXTRACT_DIR"
+              # Verify extract directory exists and is writable
+              if [ ! -d "$EXTRACT_DIR" ]; then
+                echo "❌ Failed to create extract directory: $EXTRACT_DIR"
+                exit 1
+              fi
+
+              if [ ! -w "$EXTRACT_DIR" ]; then
+                echo "❌ Extract directory is not writable: $EXTRACT_DIR"
+                exit 1
+              fi
+
+              echo "  Extract directory: $EXTRACT_DIR"
+
+              cd "$EXTRACT_DIR" || {
+                echo "❌ Failed to change to extract directory: $EXTRACT_DIR"
+                exit 1
+              }
 
               EXTRACTED=false
 
@@ -970,9 +986,23 @@ jobs:
 
                     TEMP_TAR="/tmp/$(basename "$data_tar")"
 
-                    if ar p "$RPM_FILE" "$data_tar" > "$TEMP_TAR" 2>&1; then
+                    AR_EXIT_CODE=1
+
+                    ar p "$RPM_FILE" "$data_tar" > "$TEMP_TAR" 2>&1
+
+                    AR_EXIT_CODE=$?
+
+                    if [ $AR_EXIT_CODE -eq 0 ]; then
 
                       # Check if file was extracted and has content
+
+                      if [ ! -f "$TEMP_TAR" ]; then
+
+                        echo "    ⚠️  Failed to create temp file: $TEMP_TAR"
+
+                        continue
+
+                      fi
 
                       if [ ! -s "$TEMP_TAR" ]; then
 
@@ -984,19 +1014,39 @@ jobs:
 
                       fi
 
-                      echo "    Extracted $data_tar ($(ls -lh "$TEMP_TAR" | awk '{print $5}'))"
+                      FILE_SIZE=$(ls -lh "$TEMP_TAR" | awk '{print $5}')
+
+                      echo "    Extracted $data_tar (size: $FILE_SIZE)"
+
+                      # Verify it looks like a tar file
+
+                      if ! file "$TEMP_TAR" | grep -qiE "(tar|gzip|bzip|xz|compressed|archive)"; then
+
+                        echo "    ⚠️  File doesn't appear to be a tar archive, trying next format..."
+
+                        file "$TEMP_TAR"
+
+                        rm -f "$TEMP_TAR"
+
+                        continue
+
+                      fi
 
                       # Try to extract tar archive based on compression
 
                       TAR_SUCCESS=false
 
-                      TAR_ERROR=""
+                      TAR_EXIT_CODE=1
 
                       if [ "$data_tar" = "data.tar.gz" ]; then
 
-                        TAR_ERROR=$(tar -xzf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1)
+                        echo "    Running: tar -xzf $TEMP_TAR -C $EXTRACT_DIR"
 
-                        if [ $? -eq 0 ]; then
+                        tar -xzf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1
+
+                        TAR_EXIT_CODE=$?
+
+                        if [ $TAR_EXIT_CODE -eq 0 ]; then
 
                           TAR_SUCCESS=true
 
@@ -1004,15 +1054,19 @@ jobs:
 
                         else
 
-                          echo "    ⚠️  tar -xzf failed: $TAR_ERROR"
+                          echo "    ⚠️  tar -xzf failed with exit code: $TAR_EXIT_CODE"
 
                         fi
 
                       elif [ "$data_tar" = "data.tar.xz" ]; then
 
-                        TAR_ERROR=$(tar -xJf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1)
+                        echo "    Running: tar -xJf $TEMP_TAR -C $EXTRACT_DIR"
 
-                        if [ $? -eq 0 ]; then
+                        tar -xJf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1
+
+                        TAR_EXIT_CODE=$?
+
+                        if [ $TAR_EXIT_CODE -eq 0 ]; then
 
                           TAR_SUCCESS=true
 
@@ -1020,15 +1074,19 @@ jobs:
 
                         else
 
-                          echo "    ⚠️  tar -xJf failed: $TAR_ERROR"
+                          echo "    ⚠️  tar -xJf failed with exit code: $TAR_EXIT_CODE"
 
                         fi
 
                       elif [ "$data_tar" = "data.tar.bz2" ]; then
 
-                        TAR_ERROR=$(tar -xjf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1)
+                        echo "    Running: tar -xjf $TEMP_TAR -C $EXTRACT_DIR"
 
-                        if [ $? -eq 0 ]; then
+                        tar -xjf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1
+
+                        TAR_EXIT_CODE=$?
+
+                        if [ $TAR_EXIT_CODE -eq 0 ]; then
 
                           TAR_SUCCESS=true
 
@@ -1036,15 +1094,19 @@ jobs:
 
                         else
 
-                          echo "    ⚠️  tar -xjf failed: $TAR_ERROR"
+                          echo "    ⚠️  tar -xjf failed with exit code: $TAR_EXIT_CODE"
 
                         fi
 
                       elif [ "$data_tar" = "data.tar" ]; then
 
-                        TAR_ERROR=$(tar -xf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1)
+                        echo "    Running: tar -xf $TEMP_TAR -C $EXTRACT_DIR"
 
-                        if [ $? -eq 0 ]; then
+                        tar -xf "$TEMP_TAR" -C "$EXTRACT_DIR" 2>&1
+
+                        TAR_EXIT_CODE=$?
+
+                        if [ $TAR_EXIT_CODE -eq 0 ]; then
 
                           TAR_SUCCESS=true
 
@@ -1052,21 +1114,37 @@ jobs:
 
                         else
 
-                          echo "    ⚠️  tar -xf failed: $TAR_ERROR"
+                          echo "    ⚠️  tar -xf failed with exit code: $TAR_EXIT_CODE"
+
+                        fi
+
+                      fi
+
+                      # Verify extraction actually created files
+
+                      if [ "$TAR_SUCCESS" = true ]; then
+
+                        FILE_COUNT=$(find "$EXTRACT_DIR" -type f 2>/dev/null | wc -l)
+
+                        echo "    Extracted $FILE_COUNT files to $EXTRACT_DIR"
+
+                        if [ "$FILE_COUNT" -eq 0 ]; then
+
+                          echo "    ⚠️  Warning: No files were extracted, tar may have failed silently"
+
+                          TAR_SUCCESS=false
+
+                        else
+
+                          EXTRACTED=true
+
+                          break
 
                         fi
 
                       fi
 
                       rm -f "$TEMP_TAR"
-
-                      if [ "$TAR_SUCCESS" = true ]; then
-
-                        EXTRACTED=true
-
-                        break
-
-                      fi
 
                     else
 
