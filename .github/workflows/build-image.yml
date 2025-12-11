@@ -676,43 +676,67 @@ jobs:
 
             echo "Installing Session Manager Plugin..."
 
-            # Download and install Session Manager Plugin for Linux
+            # Download Session Manager Plugin for Linux
 
             PLUGIN_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
 
             curl -o /tmp/session-manager-plugin.rpm "$PLUGIN_URL"
 
-            # Install using dnf (RHEL 9.6)
+            # Extract RPM manually (doesn't require RPM database or sudo)
 
-            sudo dnf install -y /tmp/session-manager-plugin.rpm || {
+            cd /tmp
 
-              echo "dnf install failed, trying rpm directly..."
+            # Extract RPM using rpm2cpio (doesn't require RPM database)
 
-              sudo rpm -ivh /tmp/session-manager-plugin.rpm || {
+            if command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then
 
-                echo "rpm install failed, trying manual extraction..."
+              echo "Extracting RPM package..."
 
-                # Fallback: extract and install manually
+              rpm2cpio session-manager-plugin.rpm | cpio -idmv 2>/dev/null
 
-                cd /tmp
+              # Find the extracted binary
 
-                rpm2cpio session-manager-plugin.rpm | cpio -idmv
+              if [ -f usr/local/sessionmanagerplugin/bin/session-manager-plugin ]; then
 
-                sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/bin/ || \
+                # Create user bin directory if it doesn't exist
 
-                sudo cp usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/bin/ || \
+                mkdir -p ~/bin
 
-                cp usr/local/sessionmanagerplugin/bin/session-manager-plugin ~/bin/ || \
+                # Copy to user bin directory (no sudo required)
 
-                cp usr/local/sessionmanagerplugin/bin/session-manager-plugin ./
+                cp usr/local/sessionmanagerplugin/bin/session-manager-plugin ~/bin/
 
-              }
+                # Add to PATH for current session
 
-            }
+                export PATH="$HOME/bin:$PATH"
+
+                echo "✅ Installed to ~/bin/"
+
+                # Make executable
+
+                chmod +x ~/bin/session-manager-plugin
+
+              else
+
+                echo "❌ Failed to find extracted binary"
+
+                exit 1
+
+              fi
+
+            else
+
+              echo "❌ rpm2cpio or cpio not available, cannot extract RPM"
+
+              echo "   Please install rpm2cpio and cpio packages"
+
+              exit 1
+
+            fi
 
             # Clean up
 
-            rm -f /tmp/session-manager-plugin.rpm
+            rm -rf /tmp/session-manager-plugin.rpm /tmp/usr 2>/dev/null || true
 
             # Verify installation
 
@@ -724,11 +748,11 @@ jobs:
 
             else
 
-              echo "⚠️  Warning: session-manager-plugin may not be in PATH"
+              echo "❌ Failed to install Session Manager Plugin"
 
-              echo "   Trying to find it..."
+              echo "   Plugin may not be in PATH"
 
-              find /usr -name session-manager-plugin 2>/dev/null || echo "Plugin not found"
+              exit 1
 
             fi
 
@@ -743,6 +767,12 @@ jobs:
  
 
       - name: Build Packer image
+
+        env:
+
+          # Ensure session-manager-plugin is in PATH
+
+          PATH: ${{ env.PATH }}:$HOME/bin
 
         run: |
 
