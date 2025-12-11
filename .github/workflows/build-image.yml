@@ -948,57 +948,90 @@ jobs:
                 printf 'import os\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf 'extract_dir = sys.argv[1]\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf 'data = sys.stdin.buffer.read()\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf 'files_extracted = 0\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf 'pos = 0\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf 'try:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    while pos < len(data):\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if pos + 110 > len(data): break\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '    while pos + 110 <= len(data):\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '        header = data[pos:pos+110]\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        magic = header[:6]\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if magic != b"070701" and magic != b"070702": break\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        magic = header[0:6]\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        if magic != b"070701" and magic != b"070702":\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            if pos == 0:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '                print(f"ERROR: Invalid CPIO magic at start: {magic}")\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '        try:\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '            name_len = int(header[94:100].strip(), 16)\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '            file_size = int(header[54:60].strip(), 16)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        except: break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if name_len == 0: break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        name_bytes = data[pos+110:pos+110+name_len-1]\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        except ValueError as e:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            print(f"ERROR: Failed to parse header at pos {pos}: {e}")\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        if name_len == 0:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        name_start = pos + 110\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        name_end = name_start + name_len - 1\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        if name_end > len(data):\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        name_bytes = data[name_start:name_end]\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '        name = name_bytes.decode("utf-8", errors="ignore").rstrip("\\0")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if name == "TRAILER!!!" or not name: break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        file_data_start = pos + 110 + ((name_len + 3) // 4) * 4\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        file_data = data[file_data_start:file_data_start+file_size]\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        if name == "TRAILER!!!" or not name:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        name_padding = ((name_len + 3) // 4) * 4\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        file_data_start = pos + 110 + name_padding\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        file_data_end = file_data_start + file_size\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        if file_data_end > len(data):\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            print(f"ERROR: File data extends beyond buffer: {file_data_end} > {len(data)}")\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        file_data = data[file_data_start:file_data_end]\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '        path = os.path.join(extract_dir, name.lstrip("/"))\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if file_size > 0 and len(file_data) == file_size:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            os.makedirs(os.path.dirname(path), exist_ok=True)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            with open(path, "wb") as f:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '                f.write(file_data)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        elif file_size == 0:\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '            os.makedirs(path, exist_ok=True)\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        pos = file_data_start + ((file_size + 3) // 4) * 4\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '        if pos >= len(data): break\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    print("SUCCESS")\n' >> "$PYTHON_CPIO_SCRIPT"
-                printf '    sys.exit(0)\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        try:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            if file_size > 0:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '                os.makedirs(os.path.dirname(path), exist_ok=True)\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '                with open(path, "wb") as f:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '                    f.write(file_data)\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '                files_extracted += 1\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            else:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '                os.makedirs(path, exist_ok=True)\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        except Exception as e:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            print(f"ERROR extracting {name}: {e}")\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        file_padding = ((file_size + 3) // 4) * 4\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        pos = file_data_start + file_padding\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        if pos >= len(data):\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '            break\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '    if files_extracted > 0:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        print(f"SUCCESS: Extracted {files_extracted} files")\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        sys.exit(0)\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '    else:\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        print("ERROR: No files extracted")\n' >> "$PYTHON_CPIO_SCRIPT"
+                printf '        sys.exit(1)\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf 'except Exception as e:\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '    import traceback\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '    print(f"ERROR: {e}")\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '    traceback.print_exc()\n' >> "$PYTHON_CPIO_SCRIPT"
                 printf '    sys.exit(1)\n' >> "$PYTHON_CPIO_SCRIPT"
                 
+                # Pipe directly from rpm2cpio to Python (can't use variables due to null bytes in CPIO)
                 set +e
-                RPM2CPIO_OUTPUT=$(rpm2cpio "$RPM_FILE" 2>&1)
-                RPM2CPIO_EXIT=$?
+                rpm2cpio "$RPM_FILE" 2>/dev/null | python3 "$PYTHON_CPIO_SCRIPT" "$EXTRACT_DIR" > /tmp/python_extract.log 2>&1
+                PYTHON_EXIT=$?
                 set -e
                 
-                if [ $RPM2CPIO_EXIT -eq 0 ]; then
-                  if echo "$RPM2CPIO_OUTPUT" | python3 "$PYTHON_CPIO_SCRIPT" "$EXTRACT_DIR" 2>&1 | grep -q "SUCCESS"; then
-                    EXTRACTED=true
-                    echo "✅ Extraction successful using rpm2cpio + Python"
-                  else
-                    echo "⚠️  Python CPIO extraction failed, trying alternative..."
-                    PYTHON_ERROR=$(echo "$RPM2CPIO_OUTPUT" | python3 "$PYTHON_CPIO_SCRIPT" "$EXTRACT_DIR" 2>&1 | grep -v "SUCCESS" || true)
-                    echo "   Error: $PYTHON_ERROR"
+                if [ $PYTHON_EXIT -eq 0 ] && grep -q "SUCCESS" /tmp/python_extract.log 2>/dev/null; then
+                  EXTRACTED=true
+                  echo "✅ Extraction successful using rpm2cpio + Python"
+                  # Show extraction summary
+                  grep "SUCCESS" /tmp/python_extract.log | sed 's/^/  /'
+                  # Verify files were actually extracted
+                  FILE_COUNT=$(find "$EXTRACT_DIR" -type f 2>/dev/null | wc -l)
+                  echo "  Verified: $FILE_COUNT files in extract directory"
+                  if [ "$FILE_COUNT" -eq 0 ]; then
+                    echo "  ⚠️  Warning: No files found, extraction may have failed"
+                    EXTRACTED=false
                   fi
                 else
-                  echo "⚠️  rpm2cpio failed: $RPM2CPIO_OUTPUT"
+                  echo "⚠️  Python CPIO extraction failed (exit code: $PYTHON_EXIT)"
+                  echo "   Error log:"
+                  cat /tmp/python_extract.log 2>/dev/null | sed 's/^/     /' | head -20 || echo "     (no log available)"
                 fi
+                rm -f /tmp/python_extract.log
                 rm -f "$PYTHON_CPIO_SCRIPT"
               fi
 
