@@ -110,21 +110,13 @@ jobs:
         continue-on-error: true
 
       - name: Terraform Plan
-        if: |
-          (github.event.inputs.terraform_action != 'apply' &&
-           github.event.inputs.terraform_action != 'destroy') ||
-          github.event_name == 'push' ||
-          github.event_name == 'pull_request'
+        if: github.event.inputs.terraform_action != 'destroy' || github.event_name == 'push' || github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
         run: terraform plan -out=tfplan -no-color
         continue-on-error: false
 
       - name: Show Plan Output
-        if: |
-          (github.event.inputs.terraform_action != 'apply' &&
-           github.event.inputs.terraform_action != 'destroy') ||
-          github.event_name == 'push' ||
-          github.event_name == 'pull_request'
+        if: github.event.inputs.terraform_action != 'destroy' || github.event_name == 'push' || github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
         run: |
           echo "## Terraform Plan Output" >> $GITHUB_STEP_SUMMARY
@@ -133,7 +125,14 @@ jobs:
       - name: Terraform Apply
         if: github.event.inputs.terraform_action == 'apply' && github.event_name == 'workflow_dispatch'
         working-directory: ${{ github.workspace }}
-        run: terraform apply tfplan
+        run: |
+          if [ -f tfplan ]; then
+            echo "Applying using plan file: tfplan"
+            terraform apply tfplan
+          else
+            echo "No plan file found, applying with auto-approve"
+            terraform apply -auto-approve -no-color
+          fi
 
       - name: Terraform Destroy
         if: github.event.inputs.terraform_action == 'destroy' && github.event_name == 'workflow_dispatch'
