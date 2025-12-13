@@ -246,7 +246,6 @@ jobs:
     name: Build AMI
     needs: validate
     runs-on: terraform
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     permissions:
       contents: read
     steps:
