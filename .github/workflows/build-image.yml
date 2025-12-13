@@ -6,7 +6,7 @@ on:
       aws_region:
         description: 'AWS region'
         required: false
-        default: 'us-east-1'
+        default: 'us-east-2'
         type: string
       iam_instance_profile:
         description: 'IAM instance profile name for SSM (optional - Packer can create temporary one)'
@@ -24,7 +24,7 @@ on:
       - aws-packer
 
 env:
-  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-2' }}
   PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || github.event.inputs.iam_instance_profile || '' }}
   PKR_VAR_vpc_id: ${{ vars.VPC_ID || '' }}
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
