@@ -1,0 +1,100 @@
+name: Terraform VPC with SSM Support
+
+on:
+  workflow_dispatch:
+    inputs:
+      terraform_action:
+        description: 'Terraform action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      aws_region:
+        description: 'AWS region'
+        required: false
+        default: 'us-east-1'
+        type: string
+  push:
+    branches:
+      - terraform-vpc-ssm
+    paths:
+      - '*.tf'
+      - '.github/workflows/terraform-vpc.yml'
+  pull_request:
+    branches:
+      - terraform-vpc-ssm
+    paths:
+      - '*.tf'
+      - '.github/workflows/terraform-vpc.yml'
+
+env:
+  TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+
+jobs:
+  terraform:
+    name: Terraform ${{ github.event.inputs.terraform_action || 'plan' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Clear AWS credential caches
+        run: rm -rf ~/.aws/cli/cache ~/.aws/sso/cache ~/.aws/credentials ~/.aws/config 2>/dev/null || true
+
+      - name: Configure AWS Credentials
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "ERROR: AWS credentials not configured"
+            exit 1
+          fi
+          ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
+          SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
+          SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
+          echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
+          [ -n "${SESSION_TOKEN}" ] && echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${{ env.AWS_REGION }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.AWS_REGION }}" >> $GITHUB_ENV
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        continue-on-error: true
+
+      - name: Terraform Plan
+        if: |
+          (github.event.inputs.terraform_action != 'apply' &&
+           github.event.inputs.terraform_action != 'destroy') ||
+          github.event_name == 'push' ||
+          github.event_name == 'pull_request'
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event.inputs.terraform_action == 'apply' && github.event_name == 'workflow_dispatch'
+        run: terraform apply -auto-approve
+
+      - name: Terraform Destroy
+        if: github.event.inputs.terraform_action == 'destroy' && github.event_name == 'workflow_dispatch'
+        run: terraform destroy -auto-approve
+
+      - name: Output Terraform State
+        if: always()
+        run: |
+          echo "## Terraform Output" >> $GITHUB_STEP_SUMMARY
+          terraform output -no-color >> $GITHUB_STEP_SUMMARY || true
