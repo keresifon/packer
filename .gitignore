@@ -1,0 +1,50 @@
+# Packer
+*.pkr.hcl.backup
+*.pkr.hcl.tmp
+*.hcl.tmp
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Packer cache
+.packer.d/
+
+# Temporary files
+*.tmp
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+bin/packer
+bin/*.zip
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+tfplan
+tfplan.*
+
