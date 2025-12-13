@@ -21,18 +21,19 @@ on:
     branches:
       - terraform-vpc-ssm
     paths:
-      - '*.tf'
+      - 'terraform-vpc-ssm/**/*.tf'
       - '.github/workflows/terraform-vpc.yml'
   pull_request:
     branches:
       - terraform-vpc-ssm
     paths:
-      - '*.tf'
+      - 'terraform-vpc-ssm/**/*.tf'
       - '.github/workflows/terraform-vpc.yml'
 
 env:
   TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
   AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  TF_WORKING_DIR: './terraform-vpc-ssm'
 
 jobs:
   terraform:
@@ -40,6 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -99,3 +103,17 @@ jobs:
           echo "## Terraform Output" >> $GITHUB_STEP_SUMMARY
           terraform output -no-color >> $GITHUB_STEP_SUMMARY || true
 
+      - name: Display GitHub Actions Variables
+        if: github.event.inputs.terraform_action == 'apply' && success()
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "Add these to GitHub Actions Variables:"
+          echo "=========================================="
+          echo ""
+          echo "VPC_ID=$(terraform output -raw vpc_id)"
+          echo "SUBNET_ID=$(terraform output -raw private_subnet_ids | jq -r '.[0]')"
+          echo "SECURITY_GROUP_IDS=$(terraform output -raw packer_security_group_id)"
+          echo "IAM_INSTANCE_PROFILE=$(terraform output -raw ssm_instance_profile_name)"
+          echo ""
+          echo "=========================================="
