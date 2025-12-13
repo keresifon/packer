@@ -382,11 +382,69 @@ jobs:
           ~/bin/session-manager-plugin --version
           rm -rf "$EXTRACT_DIR"
 
+      - name: Validate VPC and Subnet exist
+        run: |
+          echo "=== Validating AWS Resources ==="
+          
+          if [ -z "${{ env.PKR_VAR_vpc_id }}" ]; then
+            echo "❌ ERROR: VPC_ID is not set. Please set the VPC_ID repository variable."
+            exit 1
+          fi
+          
+          if [ -z "${{ env.PKR_VAR_subnet_id }}" ]; then
+            echo "❌ ERROR: SUBNET_ID is not set. Please set the SUBNET_ID repository variable."
+            exit 1
+          fi
+          
+          echo "Checking VPC: ${{ env.PKR_VAR_vpc_id }}"
+          VPC_EXISTS=$(aws ec2 describe-vpcs \
+            --vpc-ids "${{ env.PKR_VAR_vpc_id }}" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'Vpcs[0].VpcId' \
+            --output text 2>/dev/null || echo "NOT_FOUND")
+          
+          if [ "$VPC_EXISTS" = "NOT_FOUND" ] || [ "$VPC_EXISTS" = "None" ] || [ -z "$VPC_EXISTS" ]; then
+            echo "❌ ERROR: VPC ${{ env.PKR_VAR_vpc_id }} does not exist in region ${{ env.PKR_VAR_aws_region }}"
+            exit 1
+          fi
+          
+          echo "✅ VPC exists: $VPC_EXISTS"
+          
+          echo "Checking Subnet: ${{ env.PKR_VAR_subnet_id }}"
+          SUBNET_EXISTS=$(aws ec2 describe-subnets \
+            --subnet-ids "${{ env.PKR_VAR_subnet_id }}" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'Subnets[0].SubnetId' \
+            --output text 2>/dev/null || echo "NOT_FOUND")
+          
+          if [ "$SUBNET_EXISTS" = "NOT_FOUND" ] || [ "$SUBNET_EXISTS" = "None" ] || [ -z "$SUBNET_EXISTS" ]; then
+            echo "❌ ERROR: Subnet ${{ env.PKR_VAR_subnet_id }} does not exist in region ${{ env.PKR_VAR_aws_region }}"
+            exit 1
+          fi
+          
+          echo "✅ Subnet exists: $SUBNET_EXISTS"
+          
+          # Verify subnet is in the VPC
+          SUBNET_VPC=$(aws ec2 describe-subnets \
+            --subnet-ids "${{ env.PKR_VAR_subnet_id }}" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'Subnets[0].VpcId' \
+            --output text)
+          
+          if [ "$SUBNET_VPC" != "${{ env.PKR_VAR_vpc_id }}" ]; then
+            echo "❌ ERROR: Subnet ${{ env.PKR_VAR_subnet_id }} belongs to VPC $SUBNET_VPC, not ${{ env.PKR_VAR_vpc_id }}"
+            exit 1
+          fi
+          
+          echo "✅ Subnet is in the correct VPC"
+
       - name: Initialize Packer
         run: packer init aws-golden-image.pkr.hcl
 
       - name: Build Packer image
         run: |
+          set -e  # Exit on any error
+          
           PACKER_BUILD_CMD="packer build -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\""
           [ -n "${{ env.PKR_VAR_iam_instance_profile }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
           [ -n "${{ env.PKR_VAR_vpc_id }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"vpc_id=${{ env.PKR_VAR_vpc_id }}\""
@@ -399,7 +457,14 @@ jobs:
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var-file=$VAR_FILE"
           fi
           PACKER_BUILD_CMD="${PACKER_BUILD_CMD} aws-golden-image.pkr.hcl"
+          
+          echo "Running: $PACKER_BUILD_CMD"
           eval $PACKER_BUILD_CMD
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Packer build failed"
+            exit 1
+          fi
 
       - name: Output AMI ID
         if: success()
