@@ -38,3 +38,8 @@ output "ec2_messages_endpoint_id" {
   description = "EC2 Messages VPC Endpoint ID"
   value       = aws_vpc_endpoint.ec2_messages.id
 }
+
+output "s3_endpoint_id" {
+  description = "S3 VPC Gateway Endpoint ID"
+  value       = aws_vpc_endpoint.s3.id
+}

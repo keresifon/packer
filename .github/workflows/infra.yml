@@ -40,6 +40,11 @@ on:
 env:
   TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
   AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  # Terraform Backend Configuration (set via GitHub repository variables)
+  TF_BACKEND_BUCKET: ${{ vars.TERRAFORM_STATE_BUCKET || '' }}
+  TF_BACKEND_KEY: ${{ vars.TERRAFORM_STATE_KEY || 'terraform.tfstate' }}
+  TF_BACKEND_REGION: ${{ vars.TERRAFORM_STATE_REGION || github.event.inputs.aws_region || 'us-east-1' }}
+  TF_BACKEND_DYNAMODB_TABLE: ${{ vars.TERRAFORM_STATE_DYNAMODB_TABLE || '' }}
 
 jobs:
   terraform:
@@ -98,13 +103,37 @@ jobs:
         run: |
           pwd
           ls -la *.tf
-          terraform init
+          
+          # Configure backend if bucket is provided
+          if [ -n "$TF_BACKEND_BUCKET" ] && [ "$TF_BACKEND_BUCKET" != "" ]; then
+            echo "Configuring S3 backend..."
+            echo "Bucket: $TF_BACKEND_BUCKET"
+            echo "Key: $TF_BACKEND_KEY"
+            echo "Region: $TF_BACKEND_REGION"
+            
+            BACKEND_CONFIG="-backend-config=bucket=$TF_BACKEND_BUCKET"
+            BACKEND_CONFIG="$BACKEND_CONFIG -backend-config=key=$TF_BACKEND_KEY"
+            BACKEND_CONFIG="$BACKEND_CONFIG -backend-config=region=$TF_BACKEND_REGION"
+            
+            if [ -n "$TF_BACKEND_DYNAMODB_TABLE" ] && [ "$TF_BACKEND_DYNAMODB_TABLE" != "" ]; then
+              echo "DynamoDB Table: $TF_BACKEND_DYNAMODB_TABLE"
+              BACKEND_CONFIG="$BACKEND_CONFIG -backend-config=dynamodb_table=$TF_BACKEND_DYNAMODB_TABLE"
+            fi
+            
+            terraform init -reconfigure $BACKEND_CONFIG
+          else
+            echo "⚠️  WARNING: No backend bucket configured. Using local state."
+            echo "Set TERRAFORM_STATE_BUCKET repository variable to use S3 backend."
+            terraform init
+          fi
 
       - name: Terraform Validate
+        if: github.event.inputs.terraform_action != 'destroy'
         working-directory: ${{ github.workspace }}
         run: terraform validate
 
       - name: Terraform Format Check
+        if: github.event.inputs.terraform_action != 'destroy'
         working-directory: ${{ github.workspace }}
         run: terraform fmt -check
         continue-on-error: true
@@ -128,6 +157,13 @@ jobs:
           echo "## Terraform Plan Output" >> $GITHUB_STEP_SUMMARY
           terraform show -no-color tfplan >> $GITHUB_STEP_SUMMARY || true
 
+      - name: Terraform Plan (Destroy)
+        if: github.event.inputs.terraform_action == 'destroy' && github.event_name == 'workflow_dispatch'
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "## Terraform Destroy Plan" >> $GITHUB_STEP_SUMMARY
+          terraform plan -destroy -no-color >> $GITHUB_STEP_SUMMARY || echo "No state found or resources already destroyed"
+
       - name: Terraform Apply
         if: github.event.inputs.terraform_action == 'apply' && github.event_name == 'workflow_dispatch'
         working-directory: ${{ github.workspace }}
@@ -136,11 +172,11 @@ jobs:
       - name: Terraform Destroy
         if: github.event.inputs.terraform_action == 'destroy' && github.event_name == 'workflow_dispatch'
         working-directory: ${{ github.workspace }}
-        run: terraform destroy -auto-approve
+        run: terraform destroy -auto-approve -no-color
 
       - name: Output Terraform State
-        if: always()
+        if: always() && github.event.inputs.terraform_action != 'destroy'
         working-directory: ${{ github.workspace }}
         run: |
           echo "## Terraform Output" >> $GITHUB_STEP_SUMMARY
-          terraform output -no-color >> $GITHUB_STEP_SUMMARY || true
+          terraform output -no-color >> $GITHUB_STEP_SUMMARY || echo "No outputs available"
