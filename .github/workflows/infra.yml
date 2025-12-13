@@ -54,10 +54,43 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
-          fetch-depth: 0
+        run: |
+          # Use git directly to avoid Node.js dependency
+          REF="${{ github.event.inputs.ref || github.ref }}"
+          BRANCH_OR_TAG="${REF#refs/heads/}"
+          BRANCH_OR_TAG="${BRANCH_OR_TAG#refs/tags/}"
+          
+          # If code is already checked out (common on self-hosted runners)
+          if [ -d .git ]; then
+            echo "Repository already checked out, updating..."
+            git fetch origin || true
+            git checkout "$BRANCH_OR_TAG" 2>/dev/null || git checkout "$REF" 2>/dev/null || echo "Already on correct ref"
+            git pull origin "$BRANCH_OR_TAG" 2>/dev/null || true
+          else
+            # Clone the repository
+            REPO_URL="https://github.com/${{ github.repository }}.git"
+            echo "Cloning repository: $REPO_URL"
+            echo "Ref: $BRANCH_OR_TAG"
+            
+            # Try with token if available (for private repos)
+            if [ -n "$GITHUB_TOKEN" ]; then
+              REPO_URL="https://${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+            fi
+            
+            git clone --depth 1 --branch "$BRANCH_OR_TAG" "$REPO_URL" . 2>/dev/null || \
+            git clone --depth 1 "$REPO_URL" . && git checkout "$BRANCH_OR_TAG" 2>/dev/null || \
+            git clone "$REPO_URL" . && git checkout "$BRANCH_OR_TAG"
+          fi
+          
+          # Show current commit and files
+          echo "Current commit:"
+          git log -1 --oneline || true
+          echo ""
+          echo "Current branch/ref:"
+          git rev-parse --abbrev-ref HEAD || git describe --tags || echo "$BRANCH_OR_TAG"
+        continue-on-error: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify Terraform files
         run: |
@@ -94,9 +127,58 @@ jobs:
           echo "AWS_REGION=${{ env.AWS_REGION }}" >> $GITHUB_ENV
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.0
+        run: |
+          TERRAFORM_VERSION="1.6.0"
+          
+          # Check if Terraform is already installed
+          if command -v terraform >/dev/null 2>&1; then
+            INSTALLED_VERSION=$(terraform version -json 2>/dev/null | grep -o '"terraform_version":"[^"]*' | cut -d'"' -f4 || terraform version | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            echo "✅ Terraform already installed: $INSTALLED_VERSION"
+            terraform version
+            exit 0
+          fi
+          
+          # Install Terraform manually
+          echo "Installing Terraform ${TERRAFORM_VERSION}..."
+          ARCH="amd64"
+          OS="linux"
+          
+          # Detect architecture
+          if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then
+            ARCH="arm64"
+          fi
+          
+          # Detect OS
+          if [ "$(uname)" = "Darwin" ]; then
+            OS="darwin"
+          fi
+          
+          TERRAFORM_ZIP="terraform_${TERRAFORM_VERSION}_${OS}_${ARCH}.zip"
+          TERRAFORM_URL="https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/${TERRAFORM_ZIP}"
+          
+          echo "Downloading Terraform from: $TERRAFORM_URL"
+          curl -fsSL "$TERRAFORM_URL" -o /tmp/terraform.zip
+          
+          if [ ! -f /tmp/terraform.zip ]; then
+            echo "❌ Failed to download Terraform"
+            exit 1
+          fi
+          
+          # Extract and install
+          unzip -q /tmp/terraform.zip -d /tmp/
+          chmod +x /tmp/terraform
+          sudo mv /tmp/terraform /usr/local/bin/terraform || mv /tmp/terraform ~/bin/terraform
+          rm /tmp/terraform.zip
+          
+          # Verify installation
+          terraform version
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Terraform installation failed"
+            exit 1
+          fi
+          
+          echo "✅ Terraform ${TERRAFORM_VERSION} installed successfully"
 
       - name: Terraform Init
         working-directory: ${{ github.workspace }}
