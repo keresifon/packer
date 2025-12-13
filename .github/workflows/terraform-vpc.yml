@@ -78,13 +78,12 @@ jobs:
         continue-on-error: true
 
       - name: Terraform Plan
-        if: github.event.inputs.terraform_action == 'plan' || github.event_name == 'pull_request'
+        if: |
+          (github.event.inputs.terraform_action != 'apply' &&
+           github.event.inputs.terraform_action != 'destroy') ||
+          github.event_name == 'push' ||
+          github.event_name == 'pull_request'
         run: terraform plan -out=tfplan
-        continue-on-error: true
-
-      - name: Terraform Plan Status
-        if: github.event.inputs.terraform_action == 'plan' || github.event_name == 'pull_request'
-        run: exit ${{ job.status }}
 
       - name: Terraform Apply
         if: github.event.inputs.terraform_action == 'apply' && github.event_name == 'workflow_dispatch'
