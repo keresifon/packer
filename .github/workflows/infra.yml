@@ -111,8 +111,7 @@ jobs:
 
       - name: Terraform Plan
         if: |
-          (github.event.inputs.terraform_action != 'apply' &&
-           github.event.inputs.terraform_action != 'destroy') ||
+          github.event.inputs.terraform_action != 'destroy' ||
           github.event_name == 'push' ||
           github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
@@ -121,8 +120,7 @@ jobs:
 
       - name: Show Plan Output
         if: |
-          (github.event.inputs.terraform_action != 'apply' &&
-           github.event.inputs.terraform_action != 'destroy') ||
+          github.event.inputs.terraform_action != 'destroy' ||
           github.event_name == 'push' ||
           github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
