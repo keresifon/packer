@@ -1,4 +1,4 @@
-name: Terraform VPC with SSM Support
+name: Infrastructure
 
 on:
   workflow_dispatch:
@@ -17,18 +17,25 @@ on:
         required: false
         default: 'us-east-1'
         type: string
+      ref:
+        description: 'Branch or ref to checkout (default: current branch)'
+        required: false
+        default: ''
+        type: string
   push:
     branches:
+      - main
       - terraform-vpc-ssm
     paths:
       - '*.tf'
-      - '.github/workflows/terraform-vpc.yml'
+      - '.github/workflows/infra.yml'
   pull_request:
     branches:
+      - main
       - terraform-vpc-ssm
     paths:
       - '*.tf'
-      - '.github/workflows/terraform-vpc.yml'
+      - '.github/workflows/infra.yml'
 
 env:
   TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
@@ -43,6 +50,25 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify Terraform files
+        run: |
+          echo "Current directory: $(pwd)"
+          echo "Branch/Ref: ${{ github.ref }}"
+          echo ""
+          echo "Listing Terraform files:"
+          if ls -la *.tf 2>/dev/null; then
+            echo "✅ Terraform files found"
+          else
+            echo "❌ ERROR: No .tf files found in root directory"
+            echo "Current branch: ${{ github.ref_name }}"
+            echo "All files in root:"
+            ls -la
+            exit 1
+          fi
 
       - name: Clear AWS credential caches
         run: rm -rf ~/.aws/cli/cache ~/.aws/sso/cache ~/.aws/credentials ~/.aws/config 2>/dev/null || true
@@ -68,12 +94,18 @@ jobs:
           terraform_version: 1.6.0
 
       - name: Terraform Init
-        run: terraform init
+        working-directory: ${{ github.workspace }}
+        run: |
+          pwd
+          ls -la *.tf
+          terraform init
 
       - name: Terraform Validate
+        working-directory: ${{ github.workspace }}
         run: terraform validate
 
       - name: Terraform Format Check
+        working-directory: ${{ github.workspace }}
         run: terraform fmt -check
         continue-on-error: true
 
@@ -83,18 +115,34 @@ jobs:
            github.event.inputs.terraform_action != 'destroy') ||
           github.event_name == 'push' ||
           github.event_name == 'pull_request'
-        run: terraform plan -out=tfplan
+        working-directory: ${{ github.workspace }}
+        run: terraform plan -out=tfplan -no-color
+        continue-on-error: false
+
+      - name: Show Plan Output
+        if: |
+          (github.event.inputs.terraform_action != 'apply' &&
+           github.event.inputs.terraform_action != 'destroy') ||
+          github.event_name == 'push' ||
+          github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "## Terraform Plan Output" >> $GITHUB_STEP_SUMMARY
+          terraform show -no-color tfplan >> $GITHUB_STEP_SUMMARY || true
 
       - name: Terraform Apply
         if: github.event.inputs.terraform_action == 'apply' && github.event_name == 'workflow_dispatch'
-        run: terraform apply -auto-approve
+        working-directory: ${{ github.workspace }}
+        run: terraform apply tfplan
 
       - name: Terraform Destroy
         if: github.event.inputs.terraform_action == 'destroy' && github.event_name == 'workflow_dispatch'
+        working-directory: ${{ github.workspace }}
         run: terraform destroy -auto-approve
 
       - name: Output Terraform State
         if: always()
+        working-directory: ${{ github.workspace }}
         run: |
           echo "## Terraform Output" >> $GITHUB_STEP_SUMMARY
           terraform output -no-color >> $GITHUB_STEP_SUMMARY || true
