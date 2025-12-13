@@ -19,16 +19,18 @@ on:
         type: string
   push:
     branches:
+      - main
       - terraform-vpc-ssm
     paths:
       - '*.tf'
-      - '.github/workflows/terraform-vpc.yml'
+      - '.github/workflows/infra.yml'
   pull_request:
     branches:
+      - main
       - terraform-vpc-ssm
     paths:
       - '*.tf'
-      - '.github/workflows/terraform-vpc.yml'
+      - '.github/workflows/infra.yml'
 
 env:
   TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
@@ -83,11 +85,22 @@ jobs:
            github.event.inputs.terraform_action != 'destroy') ||
           github.event_name == 'push' ||
           github.event_name == 'pull_request'
-        run: terraform plan -out=tfplan
+        run: terraform plan -out=tfplan -no-color
+        continue-on-error: false
+
+      - name: Show Plan Output
+        if: |
+          (github.event.inputs.terraform_action != 'apply' &&
+           github.event.inputs.terraform_action != 'destroy') ||
+          github.event_name == 'push' ||
+          github.event_name == 'pull_request'
+        run: |
+          echo "## Terraform Plan Output" >> $GITHUB_STEP_SUMMARY
+          terraform show -no-color tfplan >> $GITHUB_STEP_SUMMARY || true
 
       - name: Terraform Apply
         if: github.event.inputs.terraform_action == 'apply' && github.event_name == 'workflow_dispatch'
-        run: terraform apply -auto-approve
+        run: terraform apply tfplan
 
       - name: Terraform Destroy
         if: github.event.inputs.terraform_action == 'destroy' && github.event_name == 'workflow_dispatch'
