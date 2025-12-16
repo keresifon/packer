@@ -544,64 +544,64 @@ echo ""
 echo "=== 6.2 Local User and Group Settings ==="
 
 apply_cis_control "6.2.1" "Ensure accounts in /etc/passwd use shadowed passwords" \
-    "awk -F: '(\$2 != \"x\") {print}' /etc/passwd | while read -r line; do $SUDO usermod -p '!!' \$(echo \$line | cut -d: -f1); done || echo 'Shadow password check'"
+    "/usr/bin/awk -F: '(\$2 != \"x\") {print}' /etc/passwd | while read -r line; do user=\$(echo \"\$line\" | /usr/bin/cut -d: -f1); [ -n \"\$user\" ] && $SUDO /usr/sbin/usermod -p '!!' \"\$user\" 2>/dev/null || true; done || echo 'Shadow password check'"
 
 apply_cis_control "6.2.2" "Ensure /etc/shadow password fields are not empty" \
-    "awk -F: '(\$2 == \"\" || \$2 == \"!\") {print \$1}' /etc/shadow | while read -r user; do $SUDO passwd -l \"\$user\"; done || echo 'Empty password check'"
+    "/usr/bin/awk -F: '(\$2 == \"\" || \$2 == \"!\") {print \$1}' /etc/shadow 2>/dev/null | while read -r user; do [ -n \"\$user\" ] && $SUDO /usr/sbin/passwd -l \"\$user\" 2>/dev/null || true; done || echo 'Empty password check'"
 
 apply_cis_control "6.2.3" "Ensure all groups in /etc/passwd exist in /etc/group" \
-    "$SUDO bash -c 'for i in \$(cut -s -d: -f4 /etc/passwd | sort -u); do grep -q -P \"^.*?:[^:]*:\$i:\" /etc/group || echo \"Group \$i is referenced by /etc/passwd but does not exist in /etc/group\"; done || echo \"Group consistency check\"'"
+    "for i in \$(/usr/bin/cut -s -d: -f4 /etc/passwd | /usr/bin/sort -u); do /usr/bin/grep -q -P \"^.*?:[^:]*:\$i:\" /etc/group || echo \"Group \$i is referenced by /etc/passwd but does not exist in /etc/group\"; done || echo 'Group consistency check'"
 
 apply_cis_control "6.2.4" "Ensure all users' home directories exist" \
-    "awk -F: '{print \$1, \$6}' /etc/passwd | while read -r user dir; do if [ ! -d \"\$dir\" ]; then $SUDO mkdir -p \"\$dir\"; $SUDO chown \"\$user\" \"\$dir\"; fi; done || echo 'Home directory check'"
+    "/usr/bin/awk -F: '{print \$1, \$6}' /etc/passwd | while read -r user dir; do if [ ! -d \"\$dir\" ] && [ -n \"\$dir\" ] && [ \"\$dir\" != \"/\" ]; then $SUDO mkdir -p \"\$dir\" 2>/dev/null; $SUDO chown \"\$user\" \"\$dir\" 2>/dev/null; fi; done || echo 'Home directory check'"
 
 apply_cis_control "6.2.5" "Ensure users' home directories permissions are 750 or more restrictive" \
-    "awk -F: '{print \$6}' /etc/passwd | while read -r dir; do if [ -d \"\$dir\" ]; then $SUDO chmod 750 \"\$dir\"; fi; done || echo 'Home directory permissions'"
+    "/usr/bin/awk -F: '{print \$6}' /etc/passwd | while read -r dir; do if [ -d \"\$dir\" ] && [ \"\$dir\" != \"/\" ]; then $SUDO chmod 750 \"\$dir\" 2>/dev/null || true; fi; done || echo 'Home directory permissions'"
 
 apply_cis_control "6.2.6" "Ensure users own their home directories" \
-    "awk -F: '{print \$1, \$6}' /etc/passwd | while read -r user dir; do if [ -d \"\$dir\" ]; then $SUDO chown \"\$user\" \"\$dir\"; fi; done || echo 'Home directory ownership'"
+    "/usr/bin/awk -F: '{print \$1, \$6}' /etc/passwd | while read -r user dir; do if [ -d \"\$dir\" ] && [ \"\$dir\" != \"/\" ]; then $SUDO chown \"\$user\" \"\$dir\" 2>/dev/null || true; fi; done || echo 'Home directory ownership'"
 
 apply_cis_control "6.2.7" "Ensure users' dot files are not group or world writable" \
-    "$SUDO find /home -name \".*\" -type f -perm /022 -exec chmod go-w {} + || echo 'Dot files permissions'"
+    "$SUDO /usr/bin/find /home -name \".*\" -type f -perm /022 -exec chmod go-w {} + 2>/dev/null || echo 'Dot files permissions'"
 
 apply_cis_control "6.2.8" "Ensure no users have .forward files" \
-    "$SUDO find /home -name \".forward\" -type f -delete || echo 'Forward files check'"
+    "$SUDO /usr/bin/find /home -name \".forward\" -type f -delete 2>/dev/null || echo 'Forward files check'"
 
 apply_cis_control "6.2.9" "Ensure no users have .netrc files" \
-    "$SUDO find /home -name \".netrc\" -type f -delete || echo 'Netrc files check'"
+    "$SUDO /usr/bin/find /home -name \".netrc\" -type f -delete 2>/dev/null || echo 'Netrc files check'"
 
 apply_cis_control "6.2.10" "Ensure users' .netrc Files are not group or world accessible" \
-    "$SUDO find /home -name \".netrc\" -type f -exec chmod 600 {} + || echo 'Netrc files permissions'"
+    "$SUDO /usr/bin/find /home -name \".netrc\" -type f -exec chmod 600 {} + 2>/dev/null || echo 'Netrc files permissions'"
 
 apply_cis_control "6.2.11" "Ensure no users have .rhosts files" \
-    "$SUDO find /home -name \".rhosts\" -type f -delete || echo 'Rhosts files check'"
+    "$SUDO /usr/bin/find /home -name \".rhosts\" -type f -delete 2>/dev/null || echo 'Rhosts files check'"
 
 apply_cis_control "6.2.12" "Ensure all groups in /etc/group exist in /etc/passwd" \
-    "$SUDO bash -c 'for group in \$(cut -s -d: -f3 /etc/group); do grep -q -P \"^.*?:[^:]*:[^:]*:\$group:\" /etc/passwd || echo \"Group \$group exists in /etc/group but not in /etc/passwd\"; done || echo \"Group consistency check\"'"
+    "for i in \$(/usr/bin/cut -s -d: -f3 /etc/group); do /usr/bin/grep -q -P \"^.*?:[^:]*:[^:]*:\$i:\" /etc/passwd || echo \"Group \$i exists in /etc/group but not in /etc/passwd\"; done || echo 'Group consistency check'"
 
 apply_cis_control "6.2.13" "Ensure root is the only UID 0 account" \
-    "awk -F: '(\$3 == 0 && \$1 != \"root\") {print}' /etc/passwd | while read -r line; do user=\$(echo \$line | cut -d: -f1); $SUDO userdel \"\$user\"; done || echo 'UID 0 check'"
+    "/usr/bin/awk -F: '(\$3 == 0 && \$1 != \"root\") {print}' /etc/passwd | while read -r line; do user=\$(echo \"\$line\" | /usr/bin/cut -d: -f1); [ -n \"\$user\" ] && $SUDO /usr/sbin/userdel \"\$user\" 2>/dev/null || true; done || echo 'UID 0 check'"
 
 apply_cis_control "6.2.14" "Ensure root PATH Integrity" \
-    "$SUDO bash -c \"echo 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' > /root/.bashrc && echo 'export PATH' >> /root/.bashrc\" || echo 'Root PATH'"
+    "$SUDO bash -c 'echo \"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\" > /root/.bashrc && echo \"export PATH\" >> /root/.bashrc' 2>/dev/null || echo 'Root PATH'"
 
 apply_cis_control "6.2.15" "Ensure all interactive users have home directories" \
-    "awk -F: '{if (\$7 !~ /nologin/ && \$6 == \"/\") print \$1}' /etc/passwd | while read -r user; do $SUDO mkdir -p \"/home/\$user\"; $SUDO chown \"\$user\" \"/home/\$user\"; done || echo 'Interactive users home'"
+    "/usr/bin/awk -F: '{if (\$7 !~ /nologin/ && \$6 == \"/\") print \$1}' /etc/passwd | while read -r user; do [ -n \"\$user\" ] && $SUDO mkdir -p \"/home/\$user\" 2>/dev/null && $SUDO chown \"\$user\" \"/home/\$user\" 2>/dev/null || true; done || echo 'Interactive users home'"
 
 apply_cis_control "6.2.16" "Ensure users' home directories are not group or world writable" \
-    "$SUDO find /home -type d -perm /022 -exec chmod go-w {} + || echo 'Home directories writable'"
+    "$SUDO /usr/bin/find /home -type d -perm /022 -exec chmod go-w {} + 2>/dev/null || echo 'Home directories writable'"
 
 apply_cis_control "6.2.17" "Ensure no duplicate UIDs exist" \
-    "cut -f3 -d\":\" /etc/passwd | sort -n | uniq -d | while read -r uid; do awk -F: '\$3 == \"\$uid\" {print \$1}' /etc/passwd; done || echo 'Duplicate UID check'"
+    "/usr/bin/cut -f3 -d\":\" /etc/passwd | /usr/bin/sort -n | /usr/bin/uniq -d | while read -r uid; do /usr/bin/awk -F: '\$3 == \"\$uid\" {print \$1}' /etc/passwd; done || echo 'Duplicate UID check'"
 
 apply_cis_control "6.2.18" "Ensure no duplicate GIDs exist" \
-    "cut -f3 -d\":\" /etc/group | sort -n | uniq -d | while read -r gid; do awk -F: '\$3 == \"\$gid\" {print \$1}' /etc/group; done || echo 'Duplicate GID check'"
+    "/usr/bin/cut -f3 -d\":\" /etc/group | /usr/bin/sort -n | /usr/bin/uniq -d | while read -r gid; do /usr/bin/awk -F: '\$3 == \"\$gid\" {print \$1}' /etc/group; done || echo 'Duplicate GID check'"
 
 apply_cis_control "6.2.19" "Ensure no duplicate user names exist" \
-    "cut -f1 -d\":\" /etc/passwd | sort | uniq -d || echo 'Duplicate username check'"
+    "/usr/bin/cut -f1 -d\":\" /etc/passwd | /usr/bin/sort | /usr/bin/uniq -d || echo 'Duplicate username check'"
 
 apply_cis_control "6.2.20" "Ensure no duplicate group names exist" \
-    "cut -f1 -d\":\" /etc/group | sort | uniq -d || echo 'Duplicate group name check'"
+    "/usr/bin/cut -f1 -d\":\" /etc/group | /usr/bin/sort | /usr/bin/uniq -d || echo 'Duplicate group name check'"
 
 echo ""
 echo -e "${GREEN}=== CIS Level 2 Hardening Complete ===${NC}"

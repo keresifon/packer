@@ -6,7 +6,8 @@ This document describes how to implement CIS (Center for Internet Security) Leve
 
 The CIS hardening implementation includes:
 - **CIS Level 2 Hardening Scripts**: Automated implementation of CIS benchmark controls
-- **S3-based CIS Tools**: Download and run CIS assessment tools from S3
+- **OpenSCAP Assessment**: Uses OpenSCAP scanner with SCAP content for compliance verification
+- **S3-based SCAP Content**: Download SCAP content files from S3 for assessment
 - **Compliance Verification**: Automated assessment to verify hardening compliance
 
 ## Prerequisites
@@ -18,20 +19,26 @@ The CIS hardening implementation includes:
 
 ## S3 Bucket Structure
 
-Upload CIS tools to your S3 bucket with the following structure:
+Upload OpenSCAP and SCAP content to your S3 bucket with the following structure:
 
 ```
 s3://your-cis-bucket/
 └── cis-tools/
-    ├── cis-cat-full/
-    │   ├── CIS-CAT.sh
-    │   ├── Assessor-CLI.sh
-    │   └── ... (other CIS-CAT files)
-    ├── cis-workbench/
-    │   ├── assess.sh
-    │   └── ... (other workbench files)
-    └── ... (other CIS tools)
+    ├── openscap-scanner-*.rpm          # OpenSCAP RPM package
+    ├── openscap-*.tar.gz               # OR OpenSCAP archive (tar.gz/tar.bz2/zip)
+    ├── openscap/                       # OR Pre-extracted OpenSCAP directory
+    │   ├── bin/
+    │   │   └── oscap
+    │   └── lib/
+    └── scap-content/
+        ├── CIS_Amazon_Linux_2023_Benchmark_v1.0.0-xccdf.xml
+        ├── CIS_Amazon_Linux_2023_Benchmark_v1.0.0-oval.xml
+        └── ... (other SCAP content files)
 ```
+
+**Note**: 
+- OpenSCAP can be provided as RPM, archive (tar.gz/tar.bz2/zip), or pre-extracted directory
+- SCAP content files can also be placed directly in the `cis-tools/` directory as `.xml` files
 
 ### Required S3 Permissions
 
@@ -83,35 +90,90 @@ PKR_VAR_cis_s3_prefix: ${{ vars.CIS_S3_PREFIX || 'cis-tools' }}
 PKR_VAR_enable_cis_hardening: true
 ```
 
-## CIS Tools Setup
+## OpenSCAP and SCAP Content Setup
 
-### Option 1: Download CIS-CAT (Recommended)
+### Step 1: Download OpenSCAP
 
-1. **Download CIS-CAT**:
-   - Visit: https://www.cisecurity.org/cybersecurity-tools/cis-cat-pro/
-   - Download CIS-CAT Full (requires CIS Workbench account)
-   - Extract the archive
+You need to provide OpenSCAP in one of these formats:
 
-2. **Upload to S3**:
+#### Option A: OpenSCAP RPM (Recommended)
+
+1. **Download OpenSCAP RPM**:
    ```bash
-   aws s3 sync ./cis-cat-full/ s3://your-cis-bucket/cis-tools/cis-cat-full/
+   # On a system with internet access (e.g., your local machine)
+   # Download openscap-scanner RPM for Amazon Linux 2023
+   dnf download openscap-scanner --downloaddir=./openscap-rpm
    ```
 
-### Option 2: Use CIS Workbench Scripts
+2. **Upload to S3**:
+   ```bash
+   aws s3 cp ./openscap-rpm/openscap-scanner-*.rpm s3://your-cis-bucket/cis-tools/
+   ```
 
-1. **Download CIS Workbench**:
-   - Visit: https://www.cisecurity.org/cybersecurity-tools/cis-workbench/
-   - Download Amazon Linux 2023 benchmark scripts
-   - Extract the archive
+#### Option B: OpenSCAP Archive
+
+1. **Download and extract OpenSCAP**:
+   ```bash
+   # Download OpenSCAP source or binary distribution
+   # Extract it locally
+   tar czf openscap.tar.gz openscap/
+   ```
 
 2. **Upload to S3**:
    ```bash
-   aws s3 sync ./cis-workbench/ s3://your-cis-bucket/cis-tools/cis-workbench/
+   aws s3 cp openscap.tar.gz s3://your-cis-bucket/cis-tools/
+   ```
+
+#### Option C: Pre-extracted OpenSCAP Directory
+
+1. **Extract OpenSCAP** on a system with internet access
+2. **Upload entire directory**:
+   ```bash
+   aws s3 sync ./openscap/ s3://your-cis-bucket/cis-tools/openscap/
+   ```
+
+### Step 2: Download SCAP Content
+
+#### Option 1: CIS Official SCAP Content (Recommended)
+
+1. **Download CIS SCAP Content**:
+   - Visit: https://www.cisecurity.org/benchmark/amazon_linux
+   - Download the SCAP content for Amazon Linux 2023
+   - Look for files named `CIS_Amazon_Linux_2023_Benchmark_v*.xml`
+   - Or download from: https://workbench.cisecurity.org/benchmarks
+
+2. **Upload to S3**:
+   ```bash
+   # Create directory structure
+   mkdir -p scap-content
+   
+   # Copy SCAP files (XCCDF and OVAL)
+   cp CIS_Amazon_Linux_2023_Benchmark_v*.xml scap-content/
+   
+   # Upload to S3
+   aws s3 sync ./scap-content/ s3://your-cis-bucket/cis-tools/scap-content/
+   ```
+
+#### Option 2: Use ComplianceAsCode (SCAP Security Guide)
+
+1. **Download SCAP Security Guide**:
+   - Visit: https://github.com/ComplianceAsCode/content
+   - Download or clone the repository
+   - Find Amazon Linux 2023 content in `rhel*/products/al2023/`
+
+2. **Upload to S3**:
+   ```bash
+   # Extract SCAP content
+   cd content
+   find . -name "*al2023*.xml" -path "*/products/al2023/*" -exec cp {} ../scap-content/ \;
+   
+   # Upload to S3
+   aws s3 sync ../scap-content/ s3://your-cis-bucket/cis-tools/scap-content/
    ```
 
 ### Option 3: Manual Hardening Only
 
-If you don't want to use CIS assessment tools, you can skip S3 bucket configuration. The hardening scripts will still run, but assessment will be skipped.
+If you don't want to use assessment tools, you can skip S3 bucket configuration. The hardening scripts will still run, but assessment will be skipped.
 
 ## Hardening Process
 
@@ -121,9 +183,9 @@ The Packer build process includes the following steps:
 2. **Common Packages**: Install common utilities (curl, wget, git, etc.)
 3. **SSM Agent**: Install and configure SSM Agent
 4. **AWS CLI**: Install AWS CLI (required for S3 access)
-5. **CIS Tools Download**: Download CIS tools from S3 (if bucket configured)
+5. **SCAP Content Download**: Download SCAP content from S3 (if bucket configured)
 6. **CIS Hardening**: Apply CIS Level 2 hardening controls
-7. **CIS Assessment**: Run CIS assessment tools (if available)
+7. **OpenSCAP Assessment**: Install OpenSCAP and run assessment with SCAP content
 8. **SSH Configuration**: Configure SSH hardening
 9. **Cleanup**: Clean up temporary files and caches
 
@@ -186,10 +248,20 @@ After building the AMI, you can verify CIS compliance:
    sudo ls -lah /var/log/cis-assessment/
    ```
 
-### Automated Assessment
+### Automated Assessment with OpenSCAP
 
-If CIS tools were downloaded from S3, assessment reports will be available at:
-- `/var/log/cis-assessment/` - Assessment output directory
+OpenSCAP assessment reports will be available at:
+- `/var/log/cis-assessment/oscap-assessment-*.xml` - XML results file
+- `/var/log/cis-assessment/oscap-assessment-*.html` - HTML report (human-readable)
+- `/var/log/cis-assessment/oscap-report-*.txt` - Text output
+
+**To view the HTML report**:
+1. Download the HTML file from `/var/log/cis-assessment/oscap-assessment-*.html`
+2. Open it in a web browser to view detailed compliance results
+
+**Assessment Profile**:
+- Default profile: `xccdf_org.cisecurity.benchmarks_profile_Level_2-Server`
+- You can change this by setting the `SCAP_PROFILE` environment variable
 
 ## Troubleshooting
 
@@ -213,15 +285,27 @@ If CIS tools were downloaded from S3, assessment reports will be available at:
 3. Some controls may conflict with application requirements
 4. Review and adjust hardening script as needed
 
-### Assessment Tools Not Found
+### OpenSCAP Not Found
 
-**Issue**: CIS assessment tools not found after download
+**Issue**: OpenSCAP not found after download from S3
 
 **Solutions**:
-1. Verify CIS tools are uploaded to correct S3 path
-2. Check S3 bucket structure matches expected format
-3. Review download script logs for errors
-4. Ensure CIS tools are compatible with Amazon Linux 2023
+1. Verify OpenSCAP is uploaded to S3 at `s3://bucket/cis-tools/openscap*`
+2. Check file format (RPM, tar.gz, or pre-extracted directory)
+3. Review download script logs to verify extraction
+4. Ensure OpenSCAP binary exists at `/opt/openscap/oscap` or `/opt/openscap/bin/oscap`
+5. Check file permissions on OpenSCAP binary
+
+### SCAP Content Not Found
+
+**Issue**: No SCAP content found for assessment
+
+**Solutions**:
+1. Verify SCAP content is uploaded to S3 at `s3://bucket/cis-tools/scap-content/`
+2. Ensure SCAP files have `.xml` extension
+3. Check file names match expected patterns (CIS_Amazon_Linux_2023*.xml)
+4. Review download script logs to verify files were downloaded
+5. Assessment will be skipped if no SCAP content is found (non-fatal)
 
 ## Customization
 
@@ -240,8 +324,9 @@ To implement CIS Level 1 (less restrictive), modify the hardening script to only
 ## References
 
 - [CIS Amazon Linux 2023 Benchmark](https://www.cisecurity.org/benchmark/amazon_linux)
-- [CIS-CAT Pro](https://www.cisecurity.org/cybersecurity-tools/cis-cat-pro/)
-- [CIS Workbench](https://www.cisecurity.org/cybersecurity-tools/cis-workbench/)
+- [OpenSCAP Project](https://www.open-scap.org/)
+- [SCAP Security Guide (ComplianceAsCode)](https://github.com/ComplianceAsCode/content)
+- [CIS Workbench](https://www.cisecurity.org/cybersecurity-tools/cis-workbench/) - For downloading SCAP content
 
 ## Support
 
