@@ -15,13 +15,13 @@ on:
         type: string
   push:
     branches:
-      - aws-packer
+      - aws-packer-cis
     paths:
       - '*.pkr.hcl'
       - '.github/workflows/**'
   pull_request:
     branches:
-      - aws-packer
+      - aws-packer-cis
 
 env:
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
