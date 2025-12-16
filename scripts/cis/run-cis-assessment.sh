@@ -4,6 +4,18 @@
 
 set -euo pipefail
 
+# Check if CIS hardening is enabled
+if [ "${ENABLE_CIS_HARDENING:-false}" != "true" ]; then
+    echo "⚠️  CIS hardening is disabled, skipping CIS assessment"
+    exit 0
+fi
+
+# Check if S3 bucket is configured
+if [ -z "${CIS_S3_BUCKET:-}" ]; then
+    echo "⚠️  CIS_S3_BUCKET not set, skipping CIS assessment"
+    exit 0
+fi
+
 CIS_TOOLS_DIR="/opt/cis-tools"
 ASSESSMENT_OUTPUT_DIR="/var/log/cis-assessment"
 

@@ -4,6 +4,12 @@
 
 set -euo pipefail
 
+# Check if CIS hardening is enabled
+if [ "${ENABLE_CIS_HARDENING:-false}" != "true" ]; then
+    echo "⚠️  CIS hardening is disabled, skipping CIS Level 2 hardening"
+    exit 0
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'

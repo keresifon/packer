@@ -4,6 +4,12 @@
 
 set -euo pipefail
 
+# Check if CIS hardening is enabled
+if [ "${ENABLE_CIS_HARDENING:-false}" != "true" ]; then
+    echo "⚠️  CIS hardening is disabled, skipping CIS tools download"
+    exit 0
+fi
+
 # Configuration
 CIS_S3_BUCKET="${CIS_S3_BUCKET:-}"
 CIS_S3_PREFIX="${CIS_S3_PREFIX:-cis-tools}"
