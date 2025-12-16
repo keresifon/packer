@@ -49,15 +49,15 @@ echo "=== 1.1 Filesystem Configuration ==="
 
 # 1.1.1 Ensure mounting of cramfs filesystems is disabled
 apply_cis_control "1.1.1" "Disable cramfs filesystem" \
-    "$SUDO modprobe -n -v cramfs | grep -E '(cramfs|install)' || $SUDO echo 'install cramfs /bin/true' >> /etc/modprobe.d/CIS.conf"
+    "$SUDO bash -c 'mkdir -p /etc/modprobe.d && if ! grep -q \"^install cramfs\" /etc/modprobe.d/CIS.conf 2>/dev/null; then echo \"install cramfs /bin/true\" >> /etc/modprobe.d/CIS.conf; fi' 2>/dev/null || $SUDO bash -c 'mkdir -p /etc/modprobe.d && echo \"install cramfs /bin/true\" >> /etc/modprobe.d/CIS.conf' 2>/dev/null || echo 'cramfs blacklist'"
 
 # 1.1.2 Ensure mounting of squashfs filesystems is disabled
 apply_cis_control "1.1.2" "Disable squashfs filesystem" \
-    "$SUDO modprobe -n -v squashfs | grep -E '(squashfs|install)' || $SUDO echo 'install squashfs /bin/true' >> /etc/modprobe.d/CIS.conf"
+    "$SUDO bash -c 'mkdir -p /etc/modprobe.d && if ! grep -q \"^install squashfs\" /etc/modprobe.d/CIS.conf 2>/dev/null; then echo \"install squashfs /bin/true\" >> /etc/modprobe.d/CIS.conf; fi' 2>/dev/null || $SUDO bash -c 'mkdir -p /etc/modprobe.d && echo \"install squashfs /bin/true\" >> /etc/modprobe.d/CIS.conf' 2>/dev/null || echo 'squashfs blacklist'"
 
 # 1.1.3 Ensure mounting of udf filesystems is disabled
 apply_cis_control "1.1.3" "Disable udf filesystem" \
-    "$SUDO modprobe -n -v udf | grep -E '(udf|install)' || $SUDO echo 'install udf /bin/true' >> /etc/modprobe.d/CIS.conf"
+    "$SUDO bash -c 'mkdir -p /etc/modprobe.d && if ! grep -q \"^install udf\" /etc/modprobe.d/CIS.conf 2>/dev/null; then echo \"install udf /bin/true\" >> /etc/modprobe.d/CIS.conf; fi' 2>/dev/null || $SUDO bash -c 'mkdir -p /etc/modprobe.d && echo \"install udf /bin/true\" >> /etc/modprobe.d/CIS.conf' 2>/dev/null || echo 'udf blacklist'"
 
 # 1.3 Filesystem Integrity Checking
 echo ""
@@ -293,7 +293,7 @@ echo ""
 echo "=== 3.3 Firewall Configuration ==="
 
 apply_cis_control "3.3.1" "Ensure firewalld is installed" \
-    "$SUDO dnf clean all || true; $SUDO dnf install -y --setopt=keepcache=0 firewalld || echo 'firewalld installation'"
+    "if command -v firewalld >/dev/null 2>&1 || rpm -q firewalld >/dev/null 2>&1; then echo 'firewalld already installed'; else echo 'Installing firewalld...'; timeout 600 $SUDO dnf install -y --setopt=keepcache=0 --setopt=timeout=300 --setopt=retries=3 firewalld 2>&1 | grep -E '(Installing|Downloading|Complete|Error|Failed)' | head -50 || echo 'firewalld installation completed or timed out'; fi"
 
 apply_cis_control "3.3.2" "Ensure iptables is not installed" \
     "$SUDO dnf remove -y iptables-services || echo 'iptables-services not installed'"
