@@ -195,6 +195,45 @@ resource "aws_iam_role_policy_attachment" "ssm_managed_instance_core" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Inline IAM Policy for CIS Tools S3 Access
+resource "aws_iam_role_policy" "cis_tools_s3" {
+  name = "${var.project_name}-cis-tools-s3-policy"
+  role = aws_iam_role.ssm_instance_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CISToolsS3Access"
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket",
+          "s3:GetBucketLocation"
+        ]
+        Resource = "arn:aws:s3:::cis-tools-kere"
+      },
+      {
+        Sid    = "CISToolsObjectAccess"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectVersion"
+        ]
+        Resource = "arn:aws:s3:::cis-tools-kere/*"
+      },
+      {
+        Sid    = "CISReportsUpload"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:PutObjectAcl"
+        ]
+        Resource = "arn:aws:s3:::cis-tools-kere/reports/*"
+      }
+    ]
+  })
+}
+
 # IAM Instance Profile
 resource "aws_iam_instance_profile" "packer_ssm" {
   name = "packer-ssm-instance-profile"
