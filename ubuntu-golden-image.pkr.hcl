@@ -163,22 +163,75 @@ build {
     "source.amazon-ebs.ubuntu"
   ]
   
-  # Provisioning: Update system
+  # Provisioning: Configure apt for private subnet (disable IPv6, use IPv4 only)
   provisioner "shell" {
     inline = [
-      "sudo apt-get update -y",
-      "sudo apt-get upgrade -y",
-      "sudo apt-get autoremove -y",
-      "sudo apt-get autoclean -y"
+      "# Configure apt to prefer IPv4 and disable IPv6 to avoid connection issues in private subnets",
+      "echo 'Acquire::ForceIPv4 \"true\";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4",
+      "echo 'Acquire::http::AllowRedirect \"false\";' | sudo tee -a /etc/apt/apt.conf.d/99force-ipv4",
+      "# Test S3 gateway endpoint connectivity (if available)",
+      "if aws s3 ls s3://aws-ssm-us-east-1/ 2>/dev/null | head -1 >/dev/null 2>&1; then",
+      "  echo 'S3 gateway endpoint is accessible'",
+      "else",
+      "  echo 'S3 gateway endpoint test: Not accessible or AWS CLI not available'",
+      "fi"
     ]
   }
   
-  # Provisioning: Install common packages
+  # Provisioning: Update system (handle private subnet - S3 gateway endpoint doesn't help with apt repos)
   provisioner "shell" {
     inline = [
-      "sudo apt-get install -y curl wget git unzip",
-      "sudo apt-get install -y htop net-tools",
-      "sudo apt-get install -y jq || echo 'Warning: jq installation skipped'"
+      "# Note: S3 gateway endpoint allows S3 access but Ubuntu apt repositories require internet/NAT Gateway",
+      "# Try to update package lists, but gracefully handle failures in private subnets without NAT",
+      "if sudo timeout 30 apt-get update -y 2>&1 | tee /tmp/apt-update.log | grep -qE 'Failed to fetch|Unable to fetch|Network is unreachable|Temporary failure|Could not resolve'; then",
+      "  echo 'Warning: apt-get update failed - private subnet detected without NAT Gateway'",
+      "  echo 'S3 gateway endpoint is available but apt repositories require internet access'",
+      "  echo 'Skipping package updates. Using packages already in the base Ubuntu 22.04 AMI.'",
+      "  echo 'To enable package updates, configure:'",
+      "  echo '  1. NAT Gateway with route table pointing 0.0.0.0/0 to NAT, OR'",
+      "  echo '  2. VPC Interface endpoints for apt repositories (not common), OR'",
+      "  echo '  3. Pre-stage packages in S3 and install from there'",
+      "else",
+      "  echo 'Package lists updated successfully'",
+      "  sudo apt-get upgrade -y || echo 'Warning: apt-get upgrade failed'",
+      "  sudo apt-get autoremove -y || true",
+      "  sudo apt-get autoclean -y || true",
+      "fi"
+    ]
+  }
+  
+  # Provisioning: Install common packages (handle private subnet without internet)
+  provisioner "shell" {
+    inline = [
+      "# Most Ubuntu 22.04 AMIs already include curl, wget, git - check and install only missing ones",
+      "echo 'Checking packages already in AMI:'",
+      "command -v curl >/dev/null 2>&1 && echo '  curl: already installed' || echo '  curl: missing'",
+      "command -v wget >/dev/null 2>&1 && echo '  wget: already installed' || echo '  wget: missing'",
+      "command -v git >/dev/null 2>&1 && echo '  git: already installed' || echo '  git: missing'",
+      "command -v unzip >/dev/null 2>&1 && echo '  unzip: already installed' || echo '  unzip: missing'",
+      "",
+      "# Try to install missing packages if network is available",
+      "MISSING_PACKAGES=\"\"",
+      "command -v curl >/dev/null 2>&1 || MISSING_PACKAGES=\"$MISSING_PACKAGES curl\"",
+      "command -v wget >/dev/null 2>&1 || MISSING_PACKAGES=\"$MISSING_PACKAGES wget\"",
+      "command -v git >/dev/null 2>&1 || MISSING_PACKAGES=\"$MISSING_PACKAGES git\"",
+      "command -v unzip >/dev/null 2>&1 || MISSING_PACKAGES=\"$MISSING_PACKAGES unzip\"",
+      "",
+      "if [ -n \"$MISSING_PACKAGES\" ]; then",
+      "  echo \"Attempting to install missing packages:$MISSING_PACKAGES\"",
+      "  if sudo timeout 60 apt-get install -y $MISSING_PACKAGES 2>&1 | grep -qE 'Failed to fetch|Unable to fetch|Network is unreachable'; then",
+      "    echo 'Warning: Package installation failed - network unavailable'",
+      "    echo 'S3 gateway endpoint available but apt repositories require NAT Gateway for internet access'",
+      "  else",
+      "    echo 'Packages installed successfully'",
+      "  fi",
+      "else",
+      "  echo 'All essential packages already available in AMI'",
+      "fi",
+      "",
+      "# Try to install optional packages",
+      "sudo timeout 30 apt-get install -y htop net-tools 2>/dev/null || echo 'Warning: htop/net-tools installation skipped (optional)'",
+      "sudo timeout 30 apt-get install -y jq 2>/dev/null || echo 'Warning: jq installation skipped (optional)'"
     ]
   }
   
