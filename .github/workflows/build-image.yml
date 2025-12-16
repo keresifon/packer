@@ -1,973 +1,960 @@
 name: Build Ubuntu Golden Image
 
- 
-
 on:
-
   workflow_dispatch:
-
     inputs:
-
       aws_region:
-
         description: 'AWS region'
-
         required: false
-
-        default: 'us-east-2'
-
+        default: 'us-east-1'
         type: string
-
       iam_instance_profile:
-
         description: 'IAM instance profile name for SSM (optional - Packer can create temporary one)'
-
         required: false
-
         default: ''
-
         type: string
-
   push:
-
     branches:
-
-      - main
-
+      - ubuntu-ssm
     paths:
-
       - '*.pkr.hcl'
-
       - '.github/workflows/**'
-
   pull_request:
-
     branches:
-
-      - main
-
- 
+      - ubuntu-ssm
 
 env:
-
-  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-2' }}
-
+  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
   PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || github.event.inputs.iam_instance_profile || '' }}
-
   PKR_VAR_vpc_id: ${{ vars.VPC_ID || '' }}
-
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
-
-  # PKR_VAR_security_group_ids is set conditionally in steps to avoid Packer parsing errors
-
- 
+  DEPENDENCIES_S3_BUCKET: ${{ vars.DEPENDENCIES_S3_BUCKET || '' }}
+  DEPENDENCIES_S3_PREFIX: ${{ vars.DEPENDENCIES_S3_PREFIX || 'dependencies' }}
+  PACKER_VERSION: ${{ vars.PACKER_VERSION || '1.10.0' }}
 
 jobs:
-
   validate:
-
     name: Validate Packer Template
-
-    runs-on: ubuntu-latest
-
+    runs-on: terraform
     permissions:
-
       contents: read
-
     steps:
-
       - name: Checkout code
-
         uses: actions/checkout@v4
 
- 
-
-      - name: Inspect Runner Environment
-
+      - name: Setup user bin directory
         run: |
+          mkdir -p ~/bin ~/.local/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-          echo "=== Runner OS Information ==="
-
-          uname -a
-
-          cat /etc/os-release
-
-          echo ""
-
-          echo "=== Package Manager. ==="
-
-          which dnf && dnf --version || echo "dnf not found"
-
-          which yum && yum --version || echo "yum not found"
-
-          echo ""
-
-          echo "=== Available Shells ==="
-
-          cat /etc/shells
-
-          echo ""
-
-          echo "=== Pre-installed Tools ==="
-
-          echo "curl: $(which curl || echo 'not found')"
-
-          echo "wget: $(which wget || echo 'not found')"
-
-          echo "unzip: $(which unzip || echo 'not found')"
-
-          echo "jq: $(which jq || echo 'not found')"
-
-          echo "aws: $(which aws || echo 'not found')"
-
-          echo "git: $(which git || echo 'not found')"
-
-          echo ""
-
-          echo "=== Environment Variables ==="
-
-          env | grep -E '^(PATH|HOME|USER|SHELL|RUNNER)' | sort
-
-          echo ""
-
-          echo "=== PATH ==="
-
-          echo $PATH
-
- 
-
-      - name: Install dependencies
-
+      - name: Install cpio from S3 or local RPM (CRITICAL)
         run: |
-
-          # Check if packages are already installed
-
-          if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
-
-            echo "All required packages (jq, unzip, curl) are already installed"
-
-            jq --version
-
-            unzip -v | head -1
-
-            curl --version | head -1
-
-          else
-
-            echo "Some packages missing, attempting installation..."
-
-            # Try to install missing packages, but don't fail if dnf has issues
-
-            dnf install -y jq unzip curl 2>&1 || {
-
-              echo "dnf install encountered issues, checking what's available..."
-
-              # Install jq manually if needed and dnf failed
-
-              if ! command -v jq >/dev/null 2>&1; then
-
-                echo "Installing jq from GitHub releases..."
-
-                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
-
-                chmod +x /tmp/jq
-
-                mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
-
-              fi
-
-            }
-
-            # Verify what we have
-
-            echo "Final status:"
-
-            command -v jq && jq --version || echo "jq: not available"
-
-            command -v unzip && unzip -v | head -1 || echo "unzip: not available"
-
-            command -v curl && curl --version | head -1 || echo "curl: not available"
-
+          echo "=== Installing cpio from S3 or local RPM file ==="
+          
+          if command -v cpio >/dev/null 2>&1; then
+            echo "✅ cpio is already available: $(cpio --version | head -1)"
+            exit 0
           fi
+          
+          CPIO_RPM_FILE=""
+          
+          # If S3 bucket is configured, require S3 download
+          if [ -n "${{ env.DEPENDENCIES_S3_BUCKET }}" ]; then
+            if [ -n "${DEPENDENCIES_DIR:-}" ] && ls "${DEPENDENCIES_DIR}"/cpio-*.rpm 1>/dev/null 2>&1; then
+              CPIO_RPM_FILE=$(ls "${DEPENDENCIES_DIR}"/cpio-*.rpm 2>/dev/null | head -1)
+              echo "✅ Found cpio RPM from S3: $CPIO_RPM_FILE"
+            else
+              echo "❌ ERROR: S3 bucket is configured but cpio RPM not found in S3"
+              echo "   Expected location: ${DEPENDENCIES_DIR:-/tmp/dependencies}/cpio-*.rpm"
+              echo "   S3 bucket: ${{ env.DEPENDENCIES_S3_BUCKET }}"
+              exit 1
+            fi
+          elif ls rpm/cpio-*.rpm 1>/dev/null 2>&1; then
+            CPIO_RPM_FILE=$(ls rpm/cpio-*.rpm 2>/dev/null | head -1)
+            echo "✅ Found local cpio RPM: $CPIO_RPM_FILE"
+          else
+            echo "❌ ERROR: cpio RPM not found in S3 or rpm/ directory"
+            exit 1
+          fi
+          
+          echo "Using cpio RPM: $CPIO_RPM_FILE"
+          
+          echo "Converting RPM to CPIO archive..."
+          rpm2cpio "$CPIO_RPM_FILE" > /tmp/cpio_archive.cpio
+          
+          if [ ! -s /tmp/cpio_archive.cpio ]; then
+            echo "❌ Failed to create CPIO archive"
+            exit 1
+          fi
+          
+          echo "CPIO archive created: $(ls -lh /tmp/cpio_archive.cpio | awk '{print $5}')"
+          
+          echo "Extracting CPIO archive with Python..."
+          EXTRACT_DIR=$(mktemp -d)
+          
+          # Create Python extraction script
+          cat > /tmp/extract_cpio.py <<'PYTHON_SCRIPT_END'
+          import sys
+          import os
+          
+          cpio_file = sys.argv[1]
+          extract_dir = sys.argv[2]
+          
+          def parse_cpio(data):
+              pos = 0
+              files = 0
+              
+              while pos < len(data):
+                  if pos + 110 > len(data):
+                      break
+                  
+                  magic = data[pos:pos+6]
+                  if magic not in [b'070701', b'070702']:
+                      if pos == 0:
+                          print(f"Invalid CPIO magic at start: {magic}")
+                      break
+                  
+                  try:
+                      header = data[pos:pos+110].decode('ascii')
+                      namesize = int(header[94:102], 16)
+                      filesize = int(header[54:62], 16)
+                  except Exception as e:
+                      print(f"Header parse error: {e}")
+                      break
+                  
+                  name_start = pos + 110
+                  name_end = name_start + namesize
+                  if name_end > len(data):
+                      break
+                  
+                  filename = data[name_start:name_end-1].decode('utf-8', errors='ignore')
+                  
+                  if filename == 'TRAILER!!!':
+                      break
+                  
+                  name_end_aligned = ((name_end + 3) // 4) * 4
+                  file_data_start = name_end_aligned
+                  file_data_end = file_data_start + filesize
+                  
+                  if file_data_end > len(data):
+                      break
+                  
+                  if filesize > 0 and filename and not filename.endswith('/'):
+                      filepath = os.path.join(extract_dir, filename.lstrip('./'))
+                      os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                      with open(filepath, 'wb') as f:
+                          f.write(data[file_data_start:file_data_end])
+                      files += 1
+                      if files <= 3:
+                          print(f"  Extracted: {filename}")
+                  
+                  file_data_end_aligned = ((file_data_end + 3) // 4) * 4
+                  pos = file_data_end_aligned
+              
+              return files
+          
+          try:
+              with open(cpio_file, 'rb') as f:
+                  data = f.read()
+              
+              print(f"CPIO archive size: {len(data)} bytes")
+              files = parse_cpio(data)
+              
+              if files > 0:
+                  print(f"✅ Successfully extracted {files} files")
+                  sys.exit(0)
+              else:
+                  print("❌ No files extracted")
+                  sys.exit(1)
+          except Exception as e:
+              print(f"❌ Error: {e}")
+              import traceback
+              traceback.print_exc()
+              sys.exit(1)
+          PYTHON_SCRIPT_END
+          
+          python3 /tmp/extract_cpio.py /tmp/cpio_archive.cpio "$EXTRACT_DIR"
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Failed to extract CPIO archive"
+            rm -f /tmp/cpio_archive.cpio /tmp/extract_cpio.py
+            rm -rf "$EXTRACT_DIR"
+            exit 1
+          fi
+          
+          rm -f /tmp/cpio_archive.cpio /tmp/extract_cpio.py
+          
+          CPIO_BINARY=$(find "$EXTRACT_DIR" -path "*/bin/cpio" -type f | head -1)
+          
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "Looking for cpio in alternative locations..."
+            CPIO_BINARY=$(find "$EXTRACT_DIR" -name "cpio" -type f -executable | head -1)
+          fi
+          
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "❌ cpio binary not found in extracted files"
+            echo "Contents of extract directory:"
+            find "$EXTRACT_DIR" -type f | head -30
+            exit 1
+          fi
+          
+          echo "Found cpio binary: $CPIO_BINARY"
+          cp "$CPIO_BINARY" ~/bin/cpio
+          chmod +x ~/bin/cpio
+          
+          if ~/bin/cpio --version; then
+            echo "✅ cpio installed successfully to ~/bin"
+          else
+            echo "❌ cpio installation failed"
+            exit 1
+          fi
+          
+          rm -rf "$EXTRACT_DIR"
 
- 
+      - name: Verify dependencies
+        run: |
+          echo "=== Verification ==="
+          command -v cpio && echo "✅ cpio: $(cpio --version | head -1)" || { echo "❌ cpio: MISSING"; exit 1; }
 
       - name: Setup Packer
-
         run: |
-
-          PACKER_VERSION="1.10.0"
-
-          # Download and install Packer
-
-          curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
-
-          unzip -q packer.zip
-
-          mv packer /usr/local/bin/
-
-          rm packer.zip
-
-          packer version
-
- 
+          PACKER_VERSION="${{ env.PACKER_VERSION }}"
+          
+          # Check if HashiCorp Packer is already installed in ~/bin
+          if [ -f "$HOME/bin/packer" ] && "$HOME/bin/packer" version 2>&1 | grep -qiE '(packer|version|[0-9]+\.[0-9]+)'; then
+            echo "✅ Packer already installed"
+            "$HOME/bin/packer" version
+            exit 0
+          fi
+          
+          # Install Packer
+          if [ -f "bin/packer_${PACKER_VERSION}_linux_amd64.zip" ]; then
+            unzip -q "bin/packer_${PACKER_VERSION}_linux_amd64.zip" -d ~/bin/
+          else
+            curl -fsSL "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip" -o /tmp/packer.zip
+            unzip -q /tmp/packer.zip -d ~/bin/; rm /tmp/packer.zip
+          fi
+          
+          chmod +x ~/bin/packer
+          
+          # Verify installation
+          if ! "$HOME/bin/packer" version 2>&1 | grep -qiE '(packer|version|[0-9]+\.[0-9]+)'; then
+            echo "❌ ERROR: Packer installation failed or incorrect binary"
+            exit 1
+          fi
+          
+          echo "✅ Packer installed successfully"
 
       - name: Clear AWS credential caches
-
-        run: |
-
-          echo "=== Clearing potential AWS credential caches ==="
-
-          # Clear AWS CLI cache (if AWS CLI is installed)
-
-          rm -rf ~/.aws/cli/cache 2>/dev/null || true
-
-          rm -rf ~/.aws/sso/cache 2>/dev/null || true
-
-          rm -rf ~/.aws/credentials 2>/dev/null || true
-
-          rm -rf ~/.aws/config 2>/dev/null || true
-
-          # Unset any existing AWS environment variables to ensure fresh credentials
-
-          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_DEFAULT_REGION AWS_REGION || true
-
-          echo "✅ Caches cleared"
-
- 
+        run: rm -rf ~/.aws/cli/cache ~/.aws/sso/cache ~/.aws/credentials ~/.aws/config 2>/dev/null || true
 
       - name: Configure AWS Credentials
-
         run: |
-
-          # Verify secrets are configured (before setting to GITHUB_ENV)
-
-          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
-
-            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured in GitHub Secrets."
-
-            echo "Please go to Settings > Secrets and variables > Actions and add AWS_ACCESS_KEY_ID"
-
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "ERROR: AWS credentials not configured"
             exit 1
-
           fi
-
-          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
-
-            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured in GitHub Secrets."
-
-            echo "Please go to Settings > Secrets and variables > Actions and add AWS_SECRET_ACCESS_KEY"
-
-            exit 1
-
-          fi
-
-          # Trim whitespace and set AWS credentials as environment variables for subsequent steps
-
           ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
-
           SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
-
           SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
-
           echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
-
           echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
-
-          # AWS SSO and temporary credentials require AWS_SESSION_TOKEN
-
-          if [ -n "${{ secrets.AWS_SESSION_TOKEN }}" ] && [ -n "${SESSION_TOKEN}" ]; then
-
-            echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
-
-            echo "✅ AWS SSO/temporary credentials detected (with session token)"
-
-          else
-
-            echo "ℹ️  No AWS_SESSION_TOKEN provided - using long-term credentials"
-
-          fi
-
+          [ -n "${SESSION_TOKEN}" ] && echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
 
-          # Basic format validation (without exposing values)
-
-          ACCESS_KEY_LEN=${#ACCESS_KEY}
-
-          SECRET_KEY_LEN=${#SECRET_KEY}
-
-          if [ $ACCESS_KEY_LEN -lt 16 ] || [ $ACCESS_KEY_LEN -gt 128 ]; then
-
-            echo "WARNING: AWS_ACCESS_KEY_ID length is ${ACCESS_KEY_LEN} characters (expected 16-128)"
-
-            echo "This may indicate an invalid or incorrectly formatted access key"
-
-          fi
-
-          if [ $SECRET_KEY_LEN -lt 40 ]; then
-
-            echo "WARNING: AWS_SECRET_ACCESS_KEY length is ${SECRET_KEY_LEN} characters (expected 40+)"
-
-            echo "This may indicate an invalid or incorrectly formatted secret key"
-
-          fi
-
-          echo "✅ AWS credentials configured successfully"
-
-          echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
-
-          echo "Note: Credentials will be validated by Packer during execution"
-
-          echo ""
-
-          echo "If you see 'InvalidClientTokenId' errors, please verify:"
-
-          echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
-
-          echo "2. For AWS SSO: AWS_SESSION_TOKEN secret is also set (required for SSO credentials)"
-
-          echo "3. Credentials are active and not expired (SSO tokens expire after ~1 hour)"
-
-          echo "4. IAM user/role has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
-
-          echo "5. No extra whitespace or newlines in the secret values"
-
- 
-
-      - name: Verify credentials are set correctly
-
+      - name: Download dependencies from S3 (using boto3)
+        if: env.DEPENDENCIES_S3_BUCKET != ''
         run: |
-
-          echo "=== Verifying credentials are set ==="
-
-          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-
-            echo "✅ AWS_ACCESS_KEY_ID is set (length: ${#AWS_ACCESS_KEY_ID} chars)"
-
-            echo "   Preview: ${AWS_ACCESS_KEY_ID:0:4}...${AWS_ACCESS_KEY_ID: -4}"
-
-          else
-
-            echo "❌ AWS_ACCESS_KEY_ID is NOT set"
-
-          fi
-
-          if [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
-
-            echo "✅ AWS_SECRET_ACCESS_KEY is set (length: ${#AWS_SECRET_ACCESS_KEY} chars)"
-
-          else
-
-            echo "❌ AWS_SECRET_ACCESS_KEY is NOT set"
-
-          fi
-
-          if [ -n "$AWS_SESSION_TOKEN" ]; then
-
-            echo "✅ AWS_SESSION_TOKEN is set (length: ${#AWS_SESSION_TOKEN} chars)"
-
-            echo "   Token preview: ${AWS_SESSION_TOKEN:0:20}...${AWS_SESSION_TOKEN: -10}"
-
-          else
-
-            echo "ℹ️  AWS_SESSION_TOKEN is NOT set (using long-term credentials)"
-
-          fi
-
-          echo "Region: ${AWS_DEFAULT_REGION:-'not set'}"
-
- 
+          echo "=== Downloading dependencies from S3 using boto3 ==="
+          
+          # Install boto3 if not available (usually available in Python 3.4+)
+          python3 -c "import boto3" 2>/dev/null || pip3 install --user boto3 || {
+            echo "⚠️  boto3 not available, will try to install dependencies from local rpm/ folder"
+            exit 0
+          }
+          
+          S3_BUCKET="${{ env.DEPENDENCIES_S3_BUCKET }}"
+          S3_PREFIX="${{ env.DEPENDENCIES_S3_PREFIX }}"
+          DOWNLOAD_DIR="/tmp/dependencies"
+          mkdir -p "$DOWNLOAD_DIR"
+          
+          python3 << 'PYTHON_EOF'
+          import os
+          import sys
+          import boto3
+          from botocore.exceptions import ClientError, NoCredentialsError
+          
+          bucket = os.environ.get('DEPENDENCIES_S3_BUCKET')
+          prefix = os.environ.get('DEPENDENCIES_S3_PREFIX', 'dependencies')
+          download_dir = os.environ.get('DOWNLOAD_DIR', '/tmp/dependencies')
+          region = os.environ.get('AWS_REGION', 'us-east-1')
+          
+          try:
+              s3 = boto3.client(
+                  's3',
+                  aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+                  aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+                  aws_session_token=os.environ.get('AWS_SESSION_TOKEN'),
+                  region_name=region
+              )
+              
+              # List of dependencies to download
+              # Note: awscli architecture-specific files are optional (will download based on runner arch)
+              import platform
+              arch = platform.machine()
+              awscli_arch = 'aarch64' if arch in ['aarch64', 'arm64'] else 'x86_64'
+              
+              required_deps = [
+                  f'awscli-exe-linux-{awscli_arch}.zip',
+                  'session-manager-plugin.rpm',
+                  'cpio-2.13-16.el9.x86_64.rpm'
+              ]
+              
+              # Optional: other architecture AWS CLI (for cross-platform support)
+              optional_deps = [
+                  f'awscli-exe-linux-{"aarch64" if awscli_arch == "x86_64" else "x86_64"}.zip'
+              ]
+              
+              downloaded = []
+              missing_required = []
+              
+              # Download required dependencies
+              for dep in required_deps:
+                  s3_key = f"{prefix}/{dep}" if prefix else dep
+                  local_path = f"{download_dir}/{dep}"
+                  
+                  try:
+                      print(f"Downloading: s3://{bucket}/{s3_key}")
+                      s3.download_file(bucket, s3_key, local_path)
+                      print(f"✅ Downloaded: {dep}")
+                      downloaded.append(dep)
+                  except ClientError as e:
+                      error_code = e.response.get('Error', {}).get('Code', '')
+                      if error_code == '404':
+                          print(f"❌ ERROR: Required dependency not found in S3: {dep}")
+                          missing_required.append(dep)
+                      else:
+                          print(f"❌ ERROR downloading {dep}: {e}")
+                          missing_required.append(dep)
+                  except Exception as e:
+                      print(f"❌ ERROR downloading {dep}: {e}")
+                      missing_required.append(dep)
+              
+              # Download optional dependencies (don't fail if missing)
+              for dep in optional_deps:
+                  s3_key = f"{prefix}/{dep}" if prefix else dep
+                  local_path = f"{download_dir}/{dep}"
+                  
+                  try:
+                      print(f"Downloading (optional): s3://{bucket}/{s3_key}")
+                      s3.download_file(bucket, s3_key, local_path)
+                      print(f"✅ Downloaded: {dep}")
+                      downloaded.append(dep)
+                  except ClientError as e:
+                      error_code = e.response.get('Error', {}).get('Code', '')
+                      if error_code == '404':
+                          print(f"⚠️  Optional dependency not found in S3: {dep}")
+                      else:
+                          print(f"⚠️  Error downloading optional {dep}: {e}")
+                  except Exception as e:
+                      print(f"⚠️  Error downloading optional {dep}: {e}")
+              
+              # Fail if required dependencies are missing
+              if missing_required:
+                  print(f"\n❌ ERROR: Failed to download {len(missing_required)} required dependencies from S3:")
+                  for dep in missing_required:
+                      print(f"   - {dep}")
+                  print(f"\nPlease ensure all dependencies are uploaded to s3://{bucket}/{prefix}/")
+                  sys.exit(1)
+              
+              if downloaded:
+                  print(f"\n✅ Successfully downloaded {len(downloaded)} dependencies from S3")
+              else:
+                  print("\n❌ ERROR: No dependencies downloaded from S3")
+                  sys.exit(1)
+                  
+          except NoCredentialsError:
+              print("❌ AWS credentials not configured")
+              sys.exit(1)
+          except Exception as e:
+              print(f"❌ Error accessing S3: {e}")
+              sys.exit(1)
+          PYTHON_EOF
+          
+          # Export downloaded files location
+          echo "DEPENDENCIES_DIR=$DOWNLOAD_DIR" >> $GITHUB_ENV
 
       - name: Initialize Packer
-
         run: packer init ubuntu-golden-image.pkr.hcl
-
- 
 
       - name: Validate Packer template
-
         run: packer validate ubuntu-golden-image.pkr.hcl
 
- 
-
   build:
-
     name: Build AMI
-
     needs: validate
-
-    runs-on: ubuntu-latest
-
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-
+    runs-on: terraform
     permissions:
-
       contents: read
-
     steps:
-
       - name: Checkout code
-
         uses: actions/checkout@v4
 
- 
-
-      - name: Install dependencies
-
+      - name: Setup user bin directory
         run: |
+          mkdir -p ~/bin ~/.local/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-          # Check if packages are already installed
-
-          if command -v jq >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
-
-            echo "All required packages (jq, unzip, curl) are already installed"
-
-            jq --version
-
-            unzip -v | head -1
-
-            curl --version | head -1
-
-          else
-
-            echo "Some packages missing, attempting installation..."
-
-            # Try to install missing packages, but don't fail if dnf has issues
-
-            dnf install -y jq unzip curl 2>&1 || {
-
-              echo "dnf install encountered issues, checking what's available..."
-
-              # Install jq manually if needed and dnf failed
-
-              if ! command -v jq >/dev/null 2>&1; then
-
-                echo "Installing jq from GitHub releases..."
-
-                curl -L https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /tmp/jq
-
-                chmod +x /tmp/jq
-
-                mv /tmp/jq /usr/local/bin/jq || mv /tmp/jq ~/bin/jq || cp /tmp/jq ./jq
-
-              fi
-
-            }
-
-            # Verify what we have
-
-            echo "Final status:"
-
-            command -v jq && jq --version || echo "jq: not available"
-
-            command -v unzip && unzip -v | head -1 || echo "unzip: not available"
-
-            command -v curl && curl --version | head -1 || echo "curl: not available"
-
+      - name: Install cpio from S3 or local RPM
+        run: |
+          if command -v cpio >/dev/null 2>&1; then
+            echo "✅ cpio already installed"
+            cpio --version | head -1
+            exit 0
           fi
-
- 
+          
+          echo "Installing cpio from S3 or local RPM..."
+          CPIO_RPM_FILE=""
+          
+          # If S3 bucket is configured, require S3 download
+          if [ -n "${{ env.DEPENDENCIES_S3_BUCKET }}" ]; then
+            if [ -n "${DEPENDENCIES_DIR:-}" ] && ls "${DEPENDENCIES_DIR}"/cpio-*.rpm 1>/dev/null 2>&1; then
+              CPIO_RPM_FILE=$(ls "${DEPENDENCIES_DIR}"/cpio-*.rpm 2>/dev/null | head -1)
+              echo "✅ Found cpio RPM from S3: $CPIO_RPM_FILE"
+            else
+              echo "❌ ERROR: S3 bucket is configured but cpio RPM not found in S3"
+              echo "   Expected location: ${DEPENDENCIES_DIR:-/tmp/dependencies}/cpio-*.rpm"
+              echo "   S3 bucket: ${{ env.DEPENDENCIES_S3_BUCKET }}"
+              exit 1
+            fi
+          elif ls rpm/cpio-*.rpm 1>/dev/null 2>&1; then
+            CPIO_RPM_FILE=$(ls rpm/cpio-*.rpm 2>/dev/null | head -1)
+            echo "✅ Found local cpio RPM: $CPIO_RPM_FILE"
+          else
+            echo "❌ cpio RPM not found in S3 or rpm/ directory"
+            exit 1
+          fi
+          
+          echo "Using cpio RPM: $CPIO_RPM_FILE"
+          
+          rpm2cpio "$CPIO_RPM_FILE" > /tmp/cpio_archive.cpio
+          EXTRACT_DIR=$(mktemp -d)
+          
+          cat > /tmp/ex.py <<'PYE'
+          import sys,os
+          c,e=sys.argv[1],sys.argv[2]
+          def p(d):
+            pos=0;f=0
+            while pos<len(d):
+              if pos+110>len(d):break
+              if d[pos:pos+6] not in [b'070701',b'070702']:break
+              try:h=d[pos:pos+110].decode('ascii');ns=int(h[94:102],16);fs=int(h[54:62],16)
+              except:break
+              ne=pos+110+ns
+              if ne>len(d):break
+              fn=d[pos+110:ne-1].decode('utf-8',errors='ignore')
+              if fn=='TRAILER!!!':break
+              na=((ne+3)//4)*4;fde=na+fs
+              if fde>len(d):break
+              if fs>0 and fn and not fn.endswith('/'):
+                fp=os.path.join(e,fn.lstrip('./'));os.makedirs(os.path.dirname(fp),exist_ok=True)
+                with open(fp,'wb') as ff:ff.write(d[na:fde])
+                f+=1
+              pos=((fde+3)//4)*4
+            return f
+          with open(c,'rb') as ff:d=ff.read()
+          print(f"Extracted {p(d)} files");sys.exit(0)
+          PYE
+          
+          python3 /tmp/ex.py /tmp/cpio_archive.cpio "$EXTRACT_DIR"
+          EXTRACT_EXIT=$?
+          rm -f /tmp/cpio_archive.cpio /tmp/ex.py
+          
+          if [ $EXTRACT_EXIT -ne 0 ]; then
+            echo "❌ Extraction failed"
+            rm -rf "$EXTRACT_DIR"
+            exit 1
+          fi
+          
+          # Look for cpio binary - don't require executable bit as it may not be set yet
+          CPIO_BINARY=$(find "$EXTRACT_DIR" -path "*/usr/bin/cpio" -type f | head -1)
+          
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "Trying alternative path..."
+            CPIO_BINARY=$(find "$EXTRACT_DIR" -path "*/bin/cpio" -type f | head -1)
+          fi
+          
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "Trying name-based search..."
+            CPIO_BINARY=$(find "$EXTRACT_DIR" -name "cpio" -type f | head -1)
+          fi
+          
+          if [ -z "$CPIO_BINARY" ]; then
+            echo "❌ cpio binary not found in extracted files"
+            echo "Extract directory contents:"
+            find "$EXTRACT_DIR" -type f | head -20
+            rm -rf "$EXTRACT_DIR"
+            exit 1
+          fi
+          
+          echo "Found cpio: $CPIO_BINARY"
+          cp "$CPIO_BINARY" ~/bin/cpio
+          chmod +x ~/bin/cpio
+          
+          if ~/bin/cpio --version; then
+            echo "✅ cpio installed successfully"
+          else
+            echo "❌ cpio installation verification failed"
+            exit 1
+          fi
+          
+          rm -rf "$EXTRACT_DIR"
 
       - name: Setup Packer
-
         run: |
-
-          PACKER_VERSION="1.10.0"
-
-          # Download and install Packer
-
-          curl -fsSL https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip -o packer.zip
-
-          unzip -q packer.zip
-
-          mv packer /usr/local/bin/
-
-          rm packer.zip
-
-          packer version
-
- 
-
-      - name: Clear AWS credential caches
-
-        run: |
-
-          echo "=== Clearing potential AWS credential caches ==="
-
-          # Clear AWS CLI cache (if AWS CLI is installed)
-
-          rm -rf ~/.aws/cli/cache 2>/dev/null || true
-
-          rm -rf ~/.aws/sso/cache 2>/dev/null || true
-
-          rm -rf ~/.aws/credentials 2>/dev/null || true
-
-          rm -rf ~/.aws/config 2>/dev/null || true
-
-          # Unset any existing AWS environment variables to ensure fresh credentials
-
-          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_DEFAULT_REGION AWS_REGION || true
-
-          echo "✅ Caches cleared"
-
- 
+          PACKER_VERSION="${{ env.PACKER_VERSION }}"
+          
+          # Check if HashiCorp Packer is already installed
+          if [ -f "$HOME/bin/packer" ] && "$HOME/bin/packer" version 2>&1 | grep -qiE '(packer|version|[0-9]+\.[0-9]+)'; then
+            echo "✅ Packer already installed"
+            "$HOME/bin/packer" version
+            exit 0
+          fi
+          
+          # Install Packer
+          if [ -f "bin/packer_${PACKER_VERSION}_linux_amd64.zip" ]; then
+            unzip -q "bin/packer_${PACKER_VERSION}_linux_amd64.zip" -d ~/bin/
+          else
+            curl -fsSL "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip" -o /tmp/packer.zip
+            unzip -q /tmp/packer.zip -d ~/bin/; rm /tmp/packer.zip
+          fi
+          
+          chmod +x ~/bin/packer
+          
+          # Verify installation
+          if ! "$HOME/bin/packer" version 2>&1 | grep -qiE '(packer|version|[0-9]+\.[0-9]+)'; then
+            echo "❌ ERROR: Packer installation failed or incorrect binary"
+            exit 1
+          fi
+          
+          echo "✅ Packer installed successfully"
 
       - name: Configure AWS Credentials
-
         run: |
-
-          # Verify secrets are configured (before setting to GITHUB_ENV)
-
-          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
-
-            echo "ERROR: AWS_ACCESS_KEY_ID secret is not configured in GitHub Secrets."
-
-            echo "Please go to Settings > Secrets and variables > Actions and add AWS_ACCESS_KEY_ID"
-
-            exit 1
-
-          fi
-
-          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
-
-            echo "ERROR: AWS_SECRET_ACCESS_KEY secret is not configured in GitHub Secrets."
-
-            echo "Please go to Settings > Secrets and variables > Actions and add AWS_SECRET_ACCESS_KEY"
-
-            exit 1
-
-          fi
-
-          # Trim whitespace and set AWS credentials as environment variables for subsequent steps
-
           ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
-
           SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
-
           SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
-
           echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
-
           echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
-
-          # AWS SSO and temporary credentials require AWS_SESSION_TOKEN
-
-          if [ -n "${{ secrets.AWS_SESSION_TOKEN }}" ] && [ -n "${SESSION_TOKEN}" ]; then
-
-            echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
-
-            echo "✅ AWS SSO/temporary credentials detected (with session token)"
-
-          else
-
-            echo "ℹ️  No AWS_SESSION_TOKEN provided - using long-term credentials"
-
-          fi
-
+          [ -n "${SESSION_TOKEN}" ] && echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
-
           echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
 
-          # Basic format validation (without exposing values)
-
-          ACCESS_KEY_LEN=${#ACCESS_KEY}
-
-          SECRET_KEY_LEN=${#SECRET_KEY}
-
-          if [ $ACCESS_KEY_LEN -lt 16 ] || [ $ACCESS_KEY_LEN -gt 128 ]; then
-
-            echo "WARNING: AWS_ACCESS_KEY_ID length is ${ACCESS_KEY_LEN} characters (expected 16-128)"
-
-            echo "This may indicate an invalid or incorrectly formatted access key"
-
-          fi
-
-          if [ $SECRET_KEY_LEN -lt 40 ]; then
-
-            echo "WARNING: AWS_SECRET_ACCESS_KEY length is ${SECRET_KEY_LEN} characters (expected 40+)"
-
-            echo "This may indicate an invalid or incorrectly formatted secret key"
-
-          fi
-
-          echo "✅ AWS credentials configured successfully"
-
-          echo "AWS Region: ${{ env.PKR_VAR_aws_region }}"
-
-          echo "Note: Credentials will be validated by Packer during execution"
-
-          echo ""
-
-          echo "If you see 'InvalidClientTokenId' errors, please verify:"
-
-          echo "1. AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets are set correctly"
-
-          echo "2. For AWS SSO: AWS_SESSION_TOKEN secret is also set (required for SSO credentials)"
-
-          echo "3. Credentials are active and not expired (SSO tokens expire after ~1 hour)"
-
-          echo "4. IAM user/role has required permissions (ec2:DescribeImages, ec2:RunInstances, etc.)"
-
-          echo "5. No extra whitespace or newlines in the secret values"
-
- 
-
-      - name: Verify credentials are set correctly
-
+      - name: Download dependencies from S3 (using boto3)
+        if: env.DEPENDENCIES_S3_BUCKET != ''
         run: |
+          echo "=== Downloading dependencies from S3 using boto3 ==="
+          
+          # Install boto3 if not available (usually available in Python 3.4+)
+          python3 -c "import boto3" 2>/dev/null || pip3 install --user boto3 || {
+            echo "⚠️  boto3 not available, will try to install dependencies from local rpm/ folder"
+            exit 0
+          }
+          
+          S3_BUCKET="${{ env.DEPENDENCIES_S3_BUCKET }}"
+          S3_PREFIX="${{ env.DEPENDENCIES_S3_PREFIX }}"
+          DOWNLOAD_DIR="/tmp/dependencies"
+          mkdir -p "$DOWNLOAD_DIR"
+          
+          python3 << 'PYTHON_EOF'
+          import os
+          import sys
+          import boto3
+          from botocore.exceptions import ClientError, NoCredentialsError
+          
+          bucket = os.environ.get('DEPENDENCIES_S3_BUCKET')
+          prefix = os.environ.get('DEPENDENCIES_S3_PREFIX', 'dependencies')
+          download_dir = os.environ.get('DOWNLOAD_DIR', '/tmp/dependencies')
+          region = os.environ.get('AWS_REGION', 'us-east-1')
+          
+          try:
+              s3 = boto3.client(
+                  's3',
+                  aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+                  aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+                  aws_session_token=os.environ.get('AWS_SESSION_TOKEN'),
+                  region_name=region
+              )
+              
+              # List of dependencies to download
+              # Note: awscli architecture-specific files are optional (will download based on runner arch)
+              import platform
+              arch = platform.machine()
+              awscli_arch = 'aarch64' if arch in ['aarch64', 'arm64'] else 'x86_64'
+              
+              required_deps = [
+                  f'awscli-exe-linux-{awscli_arch}.zip',
+                  'session-manager-plugin.rpm',
+                  'cpio-2.13-16.el9.x86_64.rpm'
+              ]
+              
+              # Optional: other architecture AWS CLI (for cross-platform support)
+              optional_deps = [
+                  f'awscli-exe-linux-{"aarch64" if awscli_arch == "x86_64" else "x86_64"}.zip'
+              ]
+              
+              downloaded = []
+              missing_required = []
+              
+              # Download required dependencies
+              for dep in required_deps:
+                  s3_key = f"{prefix}/{dep}" if prefix else dep
+                  local_path = f"{download_dir}/{dep}"
+                  
+                  try:
+                      print(f"Downloading: s3://{bucket}/{s3_key}")
+                      s3.download_file(bucket, s3_key, local_path)
+                      print(f"✅ Downloaded: {dep}")
+                      downloaded.append(dep)
+                  except ClientError as e:
+                      error_code = e.response.get('Error', {}).get('Code', '')
+                      if error_code == '404':
+                          print(f"❌ ERROR: Required dependency not found in S3: {dep}")
+                          missing_required.append(dep)
+                      else:
+                          print(f"❌ ERROR downloading {dep}: {e}")
+                          missing_required.append(dep)
+                  except Exception as e:
+                      print(f"❌ ERROR downloading {dep}: {e}")
+                      missing_required.append(dep)
+              
+              # Download optional dependencies (don't fail if missing)
+              for dep in optional_deps:
+                  s3_key = f"{prefix}/{dep}" if prefix else dep
+                  local_path = f"{download_dir}/{dep}"
+                  
+                  try:
+                      print(f"Downloading (optional): s3://{bucket}/{s3_key}")
+                      s3.download_file(bucket, s3_key, local_path)
+                      print(f"✅ Downloaded: {dep}")
+                      downloaded.append(dep)
+                  except ClientError as e:
+                      error_code = e.response.get('Error', {}).get('Code', '')
+                      if error_code == '404':
+                          print(f"⚠️  Optional dependency not found in S3: {dep}")
+                      else:
+                          print(f"⚠️  Error downloading optional {dep}: {e}")
+                  except Exception as e:
+                      print(f"⚠️  Error downloading optional {dep}: {e}")
+              
+              # Fail if required dependencies are missing
+              if missing_required:
+                  print(f"\n❌ ERROR: Failed to download {len(missing_required)} required dependencies from S3:")
+                  for dep in missing_required:
+                      print(f"   - {dep}")
+                  print(f"\nPlease ensure all dependencies are uploaded to s3://{bucket}/{prefix}/")
+                  sys.exit(1)
+              
+              if downloaded:
+                  print(f"\n✅ Successfully downloaded {len(downloaded)} dependencies from S3")
+              else:
+                  print("\n❌ ERROR: No dependencies downloaded from S3")
+                  sys.exit(1)
+                  
+          except NoCredentialsError:
+              print("❌ AWS credentials not configured")
+              sys.exit(1)
+          except Exception as e:
+              print(f"❌ Error accessing S3: {e}")
+              sys.exit(1)
+          PYTHON_EOF
+          
+          # Export downloaded files location
+          echo "DEPENDENCIES_DIR=$DOWNLOAD_DIR" >> $GITHUB_ENV
 
-          echo "=== Verifying credentials are set ==="
-
-          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-
-            echo "✅ AWS_ACCESS_KEY_ID is set (length: ${#AWS_ACCESS_KEY_ID} chars)"
-
-            echo "   Preview: ${AWS_ACCESS_KEY_ID:0:4}...${AWS_ACCESS_KEY_ID: -4}"
-
+      - name: Install AWS CLI
+        run: |
+          echo "=== Installing AWS CLI ==="
+          
+          # Check if AWS CLI is already installed
+          if command -v aws >/dev/null 2>&1; then
+            echo "✅ AWS CLI already installed"
+            aws --version
+            exit 0
+          fi
+          
+          # Detect architecture
+          ARCH="x86_64"
+          if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then
+            ARCH="aarch64"
+          fi
+          
+          INSTALLER_NAME="awscli-exe-linux-${ARCH}.zip"
+          INSTALL_DIR="$HOME/aws-cli"
+          AWS_CLI_ZIP=""
+          
+          # If S3 bucket is configured, require S3 download
+          if [ -n "${{ env.DEPENDENCIES_S3_BUCKET }}" ]; then
+            if [ -n "${DEPENDENCIES_DIR:-}" ] && [ -f "${DEPENDENCIES_DIR}/${INSTALLER_NAME}" ]; then
+              AWS_CLI_ZIP="${DEPENDENCIES_DIR}/${INSTALLER_NAME}"
+              echo "✅ Found AWS CLI installer from S3: $AWS_CLI_ZIP"
+            else
+              echo "❌ ERROR: S3 bucket is configured but AWS CLI installer not found in S3"
+              echo "   Expected file: ${DEPENDENCIES_DIR:-/tmp/dependencies}/${INSTALLER_NAME}"
+              echo "   S3 bucket: ${{ env.DEPENDENCIES_S3_BUCKET }}"
+              echo "   Architecture: ${ARCH}"
+              exit 1
+            fi
+          elif [ -f "rpm/$INSTALLER_NAME" ]; then
+            AWS_CLI_ZIP="rpm/$INSTALLER_NAME"
+            echo "✅ Found local AWS CLI installer: $AWS_CLI_ZIP"
           else
-
-            echo "❌ AWS_ACCESS_KEY_ID is NOT set"
-
+            echo "⚠️  AWS CLI installer not found locally, downloading from AWS..."
+            AWS_CLI_URL="https://awscli.amazonaws.com/$INSTALLER_NAME"
+            AWS_CLI_ZIP="/tmp/$INSTALLER_NAME"
+            curl -fsSL "$AWS_CLI_URL" -o "$AWS_CLI_ZIP" || {
+              echo "❌ Failed to download AWS CLI"
+              exit 1
+            }
+            echo "✅ Downloaded AWS CLI installer"
+          fi
+          
+          # Extract and install AWS CLI
+          echo "Extracting AWS CLI installer..."
+          EXTRACT_DIR=$(mktemp -d)
+          unzip -q "$AWS_CLI_ZIP" -d "$EXTRACT_DIR" || {
+            echo "❌ Failed to extract AWS CLI installer"
+            rm -rf "$EXTRACT_DIR"
+            exit 1
+          }
+          
+          echo "Installing AWS CLI to $INSTALL_DIR..."
+          # Install to user directory to avoid needing sudo
+          "$EXTRACT_DIR/aws/install" \
+            --bin-dir "$HOME/bin" \
+            --install-dir "$INSTALL_DIR" || {
+            echo "❌ Failed to install AWS CLI"
+            rm -rf "$EXTRACT_DIR"
+            exit 1
+          }
+          
+          # Clean up
+          rm -rf "$EXTRACT_DIR"
+          
+          # Verify installation
+          if command -v aws >/dev/null 2>&1; then
+            echo "✅ AWS CLI installed successfully"
+            aws --version
+          else
+            echo "❌ AWS CLI installation verification failed"
+            echo "PATH: $PATH"
+            ls -la "$HOME/bin/aws" || echo "aws binary not found in ~/bin"
+            exit 1
           fi
 
-          if [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+      - name: Configure AWS Credentials
+        run: |
+          ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
+          SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
+          SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
+          echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
+          [ -n "${SESSION_TOKEN}" ] && echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
 
-            echo "✅ AWS_SECRET_ACCESS_KEY is set (length: ${#AWS_SECRET_ACCESS_KEY} chars)"
-
+      - name: Install AWS Session Manager Plugin
+        run: |
+          if command -v session-manager-plugin >/dev/null 2>&1; then session-manager-plugin --version; exit 0; fi
+          
+          SESSION_MANAGER_RPM=""
+          
+          # If S3 bucket is configured, require S3 download
+          if [ -n "${{ env.DEPENDENCIES_S3_BUCKET }}" ]; then
+            if [ -n "${DEPENDENCIES_DIR:-}" ] && [ -f "${DEPENDENCIES_DIR}/session-manager-plugin.rpm" ]; then
+              SESSION_MANAGER_RPM="${DEPENDENCIES_DIR}/session-manager-plugin.rpm"
+              echo "✅ Found Session Manager Plugin from S3: $SESSION_MANAGER_RPM"
+            else
+              echo "❌ ERROR: S3 bucket is configured but Session Manager Plugin not found in S3"
+              echo "   Expected file: ${DEPENDENCIES_DIR:-/tmp/dependencies}/session-manager-plugin.rpm"
+              echo "   S3 bucket: ${{ env.DEPENDENCIES_S3_BUCKET }}"
+              exit 1
+            fi
+          elif [ -f "rpm/session-manager-plugin.rpm" ]; then
+            SESSION_MANAGER_RPM="rpm/session-manager-plugin.rpm"
+            echo "✅ Found local Session Manager Plugin RPM: $SESSION_MANAGER_RPM"
           else
-
-            echo "❌ AWS_SECRET_ACCESS_KEY is NOT set"
-
+            echo "⚠️  Session Manager Plugin not found locally, downloading..."
+            SESSION_MANAGER_RPM="/tmp/session-manager-plugin.rpm"
+            REGION="${{ env.PKR_VAR_aws_region }}"
+            DOWNLOAD_URL="https://s3.${REGION}.amazonaws.com/session-manager-plugin-${REGION}/session-manager-plugin.rpm"
+            curl -fsSL "$DOWNLOAD_URL" -o "$SESSION_MANAGER_RPM" || {
+              echo "❌ Failed to download Session Manager Plugin"
+              exit 1
+            }
+            echo "✅ Downloaded Session Manager Plugin"
           fi
+          
+          EXTRACT_DIR=$(mktemp -d); cd "$EXTRACT_DIR"
+          rpm2cpio "$SESSION_MANAGER_RPM" | cpio -idmv 2>&1 | head -10
+          BINARY=$(find . -name "session-manager-plugin" -type f | head -1)
+          cp "$BINARY" ~/bin/session-manager-plugin
+          chmod +x ~/bin/session-manager-plugin
+          ~/bin/session-manager-plugin --version
+          rm -rf "$EXTRACT_DIR"
+          [ "$SESSION_MANAGER_RPM" != "rpm/session-manager-plugin.rpm" ] && [ "$SESSION_MANAGER_RPM" != "${DEPENDENCIES_DIR:-}/session-manager-plugin.rpm" ] && rm -f "$SESSION_MANAGER_RPM" || true
 
-          if [ -n "$AWS_SESSION_TOKEN" ]; then
-
-            echo "✅ AWS_SESSION_TOKEN is set (length: ${#AWS_SESSION_TOKEN} chars)"
-
-            echo "   Token preview: ${AWS_SESSION_TOKEN:0:20}...${AWS_SESSION_TOKEN: -10}"
-
-          else
-
-            echo "ℹ️  AWS_SESSION_TOKEN is NOT set (using long-term credentials)"
-
+      - name: Validate VPC and Subnet exist
+        run: |
+          echo "=== Validating AWS Resources ==="
+          
+          if [ -z "${{ env.PKR_VAR_vpc_id }}" ]; then
+            echo "❌ ERROR: VPC_ID is not set. Please set the VPC_ID repository variable."
+            exit 1
           fi
-
-          echo "Region: ${AWS_DEFAULT_REGION:-'not set'}"
-
- 
+          
+          if [ -z "${{ env.PKR_VAR_subnet_id }}" ]; then
+            echo "❌ ERROR: SUBNET_ID is not set. Please set the SUBNET_ID repository variable."
+            exit 1
+          fi
+          
+          echo "Checking VPC: ${{ env.PKR_VAR_vpc_id }}"
+          VPC_EXISTS=$(aws ec2 describe-vpcs \
+            --vpc-ids "${{ env.PKR_VAR_vpc_id }}" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'Vpcs[0].VpcId' \
+            --output text 2>/dev/null || echo "NOT_FOUND")
+          
+          if [ "$VPC_EXISTS" = "NOT_FOUND" ] || [ "$VPC_EXISTS" = "None" ] || [ -z "$VPC_EXISTS" ]; then
+            echo "❌ ERROR: VPC ${{ env.PKR_VAR_vpc_id }} does not exist in region ${{ env.PKR_VAR_aws_region }}"
+            exit 1
+          fi
+          
+          echo "✅ VPC exists: $VPC_EXISTS"
+          
+          echo "Checking Subnet: ${{ env.PKR_VAR_subnet_id }}"
+          SUBNET_EXISTS=$(aws ec2 describe-subnets \
+            --subnet-ids "${{ env.PKR_VAR_subnet_id }}" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'Subnets[0].SubnetId' \
+            --output text 2>/dev/null || echo "NOT_FOUND")
+          
+          if [ "$SUBNET_EXISTS" = "NOT_FOUND" ] || [ "$SUBNET_EXISTS" = "None" ] || [ -z "$SUBNET_EXISTS" ]; then
+            echo "❌ ERROR: Subnet ${{ env.PKR_VAR_subnet_id }} does not exist in region ${{ env.PKR_VAR_aws_region }}"
+            exit 1
+          fi
+          
+          echo "✅ Subnet exists: $SUBNET_EXISTS"
+          
+          # Verify subnet is in the VPC
+          SUBNET_VPC=$(aws ec2 describe-subnets \
+            --subnet-ids "${{ env.PKR_VAR_subnet_id }}" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'Subnets[0].VpcId' \
+            --output text)
+          
+          if [ "$SUBNET_VPC" != "${{ env.PKR_VAR_vpc_id }}" ]; then
+            echo "❌ ERROR: Subnet ${{ env.PKR_VAR_subnet_id }} belongs to VPC $SUBNET_VPC, not ${{ env.PKR_VAR_vpc_id }}"
+            exit 1
+          fi
+          
+          echo "✅ Subnet is in the correct VPC"
 
       - name: Initialize Packer
-
         run: packer init ubuntu-golden-image.pkr.hcl
 
- 
-
-      - name: Validate VPC and Subnet Configuration
-
-        run: |
-
-          VPC_ID="${{ env.PKR_VAR_vpc_id }}"
-
-          SUBNET_ID="${{ env.PKR_VAR_subnet_id }}"
-
-          REGION="${{ env.PKR_VAR_aws_region }}"
-
-          IAM_PROFILE="${{ env.PKR_VAR_iam_instance_profile }}"
-
-          echo "=== VPC and Subnet Configuration ==="
-
-          echo "Region: ${REGION}"
-
-          echo "VPC ID: ${VPC_ID:-'Not specified (will use default VPC if available)'}"
-
-          echo "Subnet ID: ${SUBNET_ID:-'Not specified (will use default subnet if available)'}"
-
-          echo "IAM Instance Profile: ${IAM_PROFILE:-'Not specified (Packer will create temporary one)'}"
-
-          echo ""
-
-          # Validation: If subnet is specified, VPC must also be specified
-
-          if [ -n "$SUBNET_ID" ] && [ -z "$VPC_ID" ]; then
-
-            echo "❌ ERROR: Subnet ID is specified but VPC ID is not."
-
-            echo "Packer requires both VPC ID and Subnet ID to be specified together."
-
-            echo "The subnet must belong to the specified VPC."
-
-            echo ""
-
-            echo "Solution: Set VPC_ID repository variable, or remove SUBNET_ID to use default VPC/subnet."
-
-            exit 1
-
-          fi
-
-          if [ -n "$VPC_ID" ] && [ -n "$SUBNET_ID" ]; then
-
-            echo "✅ Both VPC and Subnet IDs are configured"
-
-            echo "⚠️  Validating subnet exists in specified region and VPC..."
-
-            # Verify subnet exists and belongs to the VPC
-
-            SUBNET_VPC_ID=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --region "$REGION" --query 'Subnets[0].VpcId' --output text 2>&1)
-
-            if [ $? -ne 0 ]; then
-
-              echo "❌ ERROR: Failed to describe subnet '$SUBNET_ID' in region '$REGION'"
-
-              echo "   Error details: $SUBNET_VPC_ID"
-
-              echo ""
-
-              echo "   Possible causes:"
-
-              echo "   1. Subnet does not exist in region '$REGION'"
-
-              echo "   2. Subnet ID is incorrect"
-
-              echo "   3. AWS credentials don't have ec2:DescribeSubnets permission"
-
-              echo ""
-
-              echo "   To list available subnets in the VPC, run:"
-
-              echo "     aws ec2 describe-subnets --filters \"Name=vpc-id,Values=$VPC_ID\" --region $REGION --query 'Subnets[*].[SubnetId,AvailabilityZone]' --output table"
-
-              exit 1
-
-            fi
-
-            if [ "$SUBNET_VPC_ID" != "$VPC_ID" ]; then
-
-              echo "❌ ERROR: Subnet '$SUBNET_ID' belongs to VPC '$SUBNET_VPC_ID', not the specified VPC '$VPC_ID'"
-
-              echo ""
-
-              echo "   Please verify:"
-
-              echo "   1. The subnet ID is correct"
-
-              echo "   2. The VPC ID matches the subnet's VPC"
-
-              exit 1
-
-            fi
-
-            echo "✅ Subnet '$SUBNET_ID' verified in VPC '$VPC_ID' in region '$REGION'"
-
-          fi
-
-          echo ""
-
-          echo "=== SSM Session Manager Configuration ==="
-
-          if [ -n "$IAM_PROFILE" ]; then
-
-            echo "✅ Using IAM instance profile: $IAM_PROFILE"
-
-            echo "   Source: GitHub repository variable IAM_INSTANCE_PROFILE or workflow input"
-
-            echo "   Ensure it has AmazonSSMManagedInstanceCore policy attached"
-
-          else
-
-            echo "ℹ️  No IAM instance profile specified"
-
-            echo "   Packer will create a temporary instance profile with SSM permissions"
-
-            echo "   To use a pre-created profile, set GitHub repository variable: IAM_INSTANCE_PROFILE"
-
-            echo "   Required IAM permissions for Packer (if creating temporary profile):"
-
-            echo "   - iam:CreateInstanceProfile"
-
-            echo "   - iam:AddRoleToInstanceProfile"
-
-            echo "   - iam:PassRole"
-
-            echo "   - iam:CreateRole"
-
-            echo "   - iam:AttachRolePolicy"
-
-          fi
-
-          echo ""
-
-          echo "=== Private Subnet Requirements for SSM ==="
-
-          if [ -n "$SUBNET_ID" ]; then
-
-            echo "⚠️  IMPORTANT: Instance will be launched in a private subnet"
-
-            echo ""
-
-            echo "   For SSM Session Manager to work in private subnets, ensure:"
-
-            echo ""
-
-            echo "   1. Security Group:"
-
-            echo "      - Packer WILL auto-create a security group if not specified"
-
-            echo "      - Packer CANNOT automatically add outbound HTTPS (443) rules to temporary SGs"
-
-            echo "      - AWS security groups allow ALL outbound by default (unless restricted)"
-
-            echo "      - Packer's auto-created SG MIGHT work if default outbound rules apply"
-
-            echo "      - RECOMMENDED: Pre-create a security group with explicit outbound HTTPS (443) rule"
-
-            echo "      - Set GitHub repository variable: SECURITY_GROUP_IDS (comma-separated)"
-
-            echo "      - Example: SECURITY_GROUP_IDS=sg-1234567890abcdef0"
-
-            echo "      - This ensures SSM works reliably in private subnets"
-
-            echo ""
-
-            echo "   2. Network Connectivity (choose one):"
-
-            echo "      Option A: NAT Gateway"
-
-            echo "        - Route table routes 0.0.0.0/0 to NAT Gateway"
-
-            echo "        - Security group allows outbound HTTPS (443) to 0.0.0.0/0"
-
-            echo ""
-
-            echo "      Option B: VPC Endpoints (for fully isolated subnets)"
-
-            echo "        - Create VPC endpoints for:"
-
-            echo "          * com.amazonaws.${REGION}.ssm (SSM service)"
-
-            echo "          * com.amazonaws.${REGION}.ssmmessages (SSM messages)"
-
-            echo "          * com.amazonaws.${REGION}.ec2 (EC2 API)"
-
-            echo "        - Security group allows outbound HTTPS (443) to VPC endpoints"
-
-            echo "        - Route table has routes to VPC endpoints"
-
-            echo ""
-
-            echo "   3. Verify IAM Instance Profile:"
-
-            echo "      - Must have AmazonSSMManagedInstanceCore policy"
-
-            echo "      - Currently using: ${IAM_PROFILE:-'Packer will create temporary one'}"
-
-            echo ""
-
-            echo "   Troubleshooting:"
-
-            echo "      - If SSM fails, check Packer's auto-created security group outbound rules"
-
-            echo "      - Default AWS security groups allow all outbound, but verify this"
-
-            echo "      - Pre-creating a security group with explicit HTTPS (443) rule is most reliable"
-
-          fi
-
- 
-
       - name: Build Packer image
-
+        id: packer_build
         run: |
-
-          PACKER_BUILD_CMD="packer build \
-
-            -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\""
-
-          # Add IAM instance profile variable if provided
-
-          if [ -n "${{ env.PKR_VAR_iam_instance_profile }}" ]; then
-
-            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
-
-            echo "Using IAM Instance Profile: ${{ env.PKR_VAR_iam_instance_profile }}"
-
-          fi
-
-          # Add VPC and subnet variables if provided
-
-          # Note: If subnet_id is provided, vpc_id should also be provided
-
-          if [ -n "${{ env.PKR_VAR_vpc_id }}" ]; then
-
-            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"vpc_id=${{ env.PKR_VAR_vpc_id }}\""
-
-            echo "Using VPC ID: ${{ env.PKR_VAR_vpc_id }}"
-
-          fi
-
-          if [ -n "${{ env.PKR_VAR_subnet_id }}" ]; then
-
-            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"subnet_id=${{ env.PKR_VAR_subnet_id }}\""
-
-            echo "Using Subnet ID: ${{ env.PKR_VAR_subnet_id }}"
-
-          fi
-
-          # Add security group IDs if provided (comma-separated string converted to HCL list)
-
-          # Note: We read directly from vars.SECURITY_GROUP_IDS to avoid Packer parsing env vars
-
-          # Packer expects HCL list syntax: ["sg-123","sg-456"]
-
+          set -euo pipefail
+          
+          # Build Packer command arguments
+          PACKER_VARS=(-var "aws_region=${{ env.PKR_VAR_aws_region }}")
+          [ -n "${{ env.PKR_VAR_iam_instance_profile }}" ] && PACKER_VARS+=(-var "iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}")
+          [ -n "${{ env.PKR_VAR_vpc_id }}" ] && PACKER_VARS+=(-var "vpc_id=${{ env.PKR_VAR_vpc_id }}")
+          [ -n "${{ env.PKR_VAR_subnet_id }}" ] && PACKER_VARS+=(-var "subnet_id=${{ env.PKR_VAR_subnet_id }}")
+          
           SECURITY_GROUP_IDS="${{ vars.SECURITY_GROUP_IDS }}"
-
-          if [ -n "$SECURITY_GROUP_IDS" ] && [ "$SECURITY_GROUP_IDS" != "" ]; then
-
-            # Convert comma-separated string to HCL list format
-
-            # Split by comma, trim spaces, wrap each in quotes, join with commas, wrap in brackets
-
-            SG_IDS="$SECURITY_GROUP_IDS"
-
-            # Create HCL list format: ["sg-123","sg-456"]
-
-            # Process each security group ID
-
-            SG_HCL=$(echo "$SG_IDS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//' | sed 's/^/[/;s/$/]/')
-
-            # Write to a temporary var file to avoid shell quoting issues
-
-            # Packer requires var files to have .hcl or .json extension
-
+          if [ -n "$SECURITY_GROUP_IDS" ]; then
+            SG_HCL=$(echo "$SECURITY_GROUP_IDS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//' | sed 's/^/[/;s/$/]/')
             VAR_FILE=$(mktemp --suffix=.hcl)
-
             echo "security_group_ids = $SG_HCL" > "$VAR_FILE"
-
-            PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var-file=$VAR_FILE"
-
-            echo "Using Security Group IDs: $SECURITY_GROUP_IDS"
-
-            echo "HCL format: $SG_HCL"
-
-            echo "Var file content:"
-
-            cat "$VAR_FILE"
-
+            PACKER_VARS+=(-var-file="$VAR_FILE")
           fi
-
-          PACKER_BUILD_CMD="${PACKER_BUILD_CMD} ubuntu-golden-image.pkr.hcl"
-
-          eval $PACKER_BUILD_CMD
-
- 
+          
+          # Verify Packer is available
+          if [ ! -f "$HOME/bin/packer" ]; then
+            echo "❌ ERROR: HashiCorp Packer not found at $HOME/bin/packer"
+            exit 1
+          fi
+          
+          PACKER_CMD="$HOME/bin/packer"
+          if ! "$PACKER_CMD" version 2>&1 | grep -qiE '(packer|version|[0-9]+\.[0-9]+)'; then
+            echo "❌ ERROR: Packer at $PACKER_CMD is not HashiCorp Packer"
+            exit 1
+          fi
+          
+          # Run Packer build with tee to show output in real-time and capture it
+          PACKER_OUTPUT_FILE=$(mktemp)
+          
+          echo "Running Packer build..."
+          echo "----------------------------------------"
+          
+          if "$PACKER_CMD" build "${PACKER_VARS[@]}" ubuntu-golden-image.pkr.hcl 2>&1 | tee "$PACKER_OUTPUT_FILE"; then
+            BUILD_EXIT_CODE=0
+          else
+            BUILD_EXIT_CODE=${PIPESTATUS[0]}
+          fi
+          
+          echo "----------------------------------------"
+          
+          PACKER_OUTPUT=$(cat "$PACKER_OUTPUT_FILE")
+          
+          if [ $BUILD_EXIT_CODE -eq 0 ]; then
+            # Extract AMI ID from Packer output
+            AMI_ID=$(echo "$PACKER_OUTPUT" | grep -iE '(amazon-ebs|AMI IDs? were created).*ami-[a-z0-9]{17}' | grep -oE 'ami-[a-z0-9]{17}' | tail -1)
+            [ -z "$AMI_ID" ] && AMI_ID=$(echo "$PACKER_OUTPUT" | grep -oE 'ami-[a-z0-9]{17}' | tail -1)
+            
+            if [ -n "$AMI_ID" ]; then
+              echo "✅ AMI build completed successfully!"
+              echo "AMI ID: $AMI_ID"
+              echo "ami_id=$AMI_ID" >> $GITHUB_OUTPUT
+              
+              # Verify AMI exists in AWS
+              if aws ec2 describe-images --image-ids "$AMI_ID" --region "${{ env.PKR_VAR_aws_region }}" --query 'Images[0].ImageId' --output text 2>/dev/null | grep -q "$AMI_ID"; then
+                echo "✅ Verified AMI exists in AWS"
+              fi
+            else
+              echo "❌ ERROR: Packer build reported success but no AMI ID found in output"
+              echo "Last 50 lines of output:"
+              echo "$PACKER_OUTPUT" | tail -50
+              rm -f "$PACKER_OUTPUT_FILE"
+              exit 1
+            fi
+          else
+            echo "❌ Packer build FAILED with exit code: $BUILD_EXIT_CODE"
+            rm -f "$PACKER_OUTPUT_FILE"
+            exit $BUILD_EXIT_CODE
+          fi
+          
+          rm -f "$PACKER_OUTPUT_FILE"
 
       - name: Output AMI ID
-
         if: success()
-
         run: |
-
-          echo "AMI build completed successfully!"
-
-          echo "Check AWS EC2 Console for the latest AMI"
+          if [ -n "${{ steps.packer_build.outputs.ami_id }}" ]; then
+            echo "## ✅ AMI Build Successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**AMI ID:** \`${{ steps.packer_build.outputs.ami_id }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Region: ${{ env.PKR_VAR_aws_region }}" >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "✅ AMI build completed successfully!"
+            echo "AMI ID: ${{ steps.packer_build.outputs.ami_id }}"
+          else
+            echo "✅ AMI build completed successfully!"
+            echo "⚠️  Note: Could not extract AMI ID from output"
+          fi
