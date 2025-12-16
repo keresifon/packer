@@ -193,26 +193,35 @@ build {
   }
 
   # Provisioning: Download CIS tools from S3 (if bucket is configured)
-  provisioner "shell" {
-    environment_vars = [
-      "CIS_S3_BUCKET=${var.cis_s3_bucket}",
-      "CIS_S3_PREFIX=${var.cis_s3_prefix}",
-      "AWS_REGION=${var.aws_region}"
-    ]
-    script = "scripts/cis/download-cis-tools.sh"
-    only_if = "${var.enable_cis_hardening && var.cis_s3_bucket != ""}"
+  dynamic "provisioner" {
+    for_each = var.enable_cis_hardening && var.cis_s3_bucket != "" ? [1] : []
+    content {
+      type = "shell"
+      environment_vars = [
+        "CIS_S3_BUCKET=${var.cis_s3_bucket}",
+        "CIS_S3_PREFIX=${var.cis_s3_prefix}",
+        "AWS_REGION=${var.aws_region}"
+      ]
+      script = "scripts/cis/download-cis-tools.sh"
+    }
   }
 
   # Provisioning: Apply CIS Level 2 Hardening
-  provisioner "shell" {
-    script = "scripts/cis/cis-level2-hardening.sh"
-    only_if = "${var.enable_cis_hardening}"
+  dynamic "provisioner" {
+    for_each = var.enable_cis_hardening ? [1] : []
+    content {
+      type = "shell"
+      script = "scripts/cis/cis-level2-hardening.sh"
+    }
   }
 
   # Provisioning: Run CIS Assessment (optional - runs assessment tools if available)
-  provisioner "shell" {
-    script = "scripts/cis/run-cis-assessment.sh"
-    only_if = "${var.enable_cis_hardening && var.cis_s3_bucket != ""}"
+  dynamic "provisioner" {
+    for_each = var.enable_cis_hardening && var.cis_s3_bucket != "" ? [1] : []
+    content {
+      type = "shell"
+      script = "scripts/cis/run-cis-assessment.sh"
+    }
   }
 
   # Provisioning: Configure SSH (CIS hardening may have already configured this)
