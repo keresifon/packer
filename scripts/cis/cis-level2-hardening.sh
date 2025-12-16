@@ -70,7 +70,7 @@ apply_cis_control "1.3.1" "Install AIDE" \
 # 1.3.2 Ensure filesystem integrity is regularly checked
 if command -v aide >/dev/null 2>&1; then
     apply_cis_control "1.3.2" "Initialize AIDE database" \
-        "$SUDO aide --init && $SUDO mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db || echo 'AIDE init skipped'"
+        "$SUDO aide --init && ($SUDO mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db 2>/dev/null || $SUDO mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz 2>/dev/null || echo 'AIDE init skipped')"
 fi
 
 # 1.4 Secure Boot Settings
@@ -122,52 +122,52 @@ echo ""
 echo "=== 1.7 Command Line Warning Banners ==="
 
 apply_cis_control "1.7.1" "Ensure message of the day is configured properly" \
-    "$SUDO bash -c 'cat > /etc/motd << EOF
+    "$SUDO bash -c \"cat > /etc/motd << 'MOTD_EOF'
 ***************************************************************************
                             NOTICE TO USERS
 
 This computer system is the property of your organization. It is for
 authorized use only. By using this system, all users acknowledge notice of
-and agree to comply with the organization\'s Acceptable Use of Information
+and agree to comply with the organization's Acceptable Use of Information
 Technology Resources Policy. Unauthorized or improper use of this system may
 result in administrative disciplinary action and civil and criminal penalties.
 By continuing to use this system you indicate your awareness of and consent
 to these terms and conditions of use. LOG OFF IMMEDIATELY if you do not agree
 to the conditions stated in this warning.
 ***************************************************************************
-EOF'"
+MOTD_EOF\""
 
 apply_cis_control "1.7.2" "Ensure local login warning banner is configured properly" \
-    "$SUDO bash -c 'cat > /etc/issue << EOF
+    "$SUDO bash -c \"cat > /etc/issue << 'ISSUE_EOF'
 ***************************************************************************
                             NOTICE TO USERS
 
 This computer system is the property of your organization. It is for
 authorized use only. By using this system, all users acknowledge notice of
-and agree to comply with the organization\'s Acceptable Use of Information
+and agree to comply with the organization's Acceptable Use of Information
 Technology Resources Policy. Unauthorized or improper use of this system may
 result in administrative disciplinary action and civil and criminal penalties.
 By continuing to use this system you indicate your awareness of and consent
 to these terms and conditions of use. LOG OFF IMMEDIATELY if you do not agree
 to the conditions stated in this warning.
 ***************************************************************************
-EOF'"
+ISSUE_EOF\""
 
 apply_cis_control "1.7.3" "Ensure remote login warning banner is configured properly" \
-    "$SUDO bash -c 'cat > /etc/issue.net << EOF
+    "$SUDO bash -c \"cat > /etc/issue.net << 'ISSUENET_EOF'
 ***************************************************************************
                             NOTICE TO USERS
 
 This computer system is the property of your organization. It is for
 authorized use only. By using this system, all users acknowledge notice of
-and agree to comply with the organization\'s Acceptable Use of Information
+and agree to comply with the organization's Acceptable Use of Information
 Technology Resources Policy. Unauthorized or improper use of this system may
 result in administrative disciplinary action and civil and criminal penalties.
 By continuing to use this system you indicate your awareness of and consent
 to these terms and conditions of use. LOG OFF IMMEDIATELY if you do not agree
 to the conditions stated in this warning.
 ***************************************************************************
-EOF'"
+ISSUENET_EOF\""
 
 apply_cis_control "1.7.4" "Ensure permissions on /etc/motd are configured" \
     "$SUDO chmod 644 /etc/motd"
@@ -544,22 +544,22 @@ echo ""
 echo "=== 6.2 Local User and Group Settings ==="
 
 apply_cis_control "6.2.1" "Ensure accounts in /etc/passwd use shadowed passwords" \
-    "$SUDO awk -F: '(\$2 != \"x\") {print}' /etc/passwd | while read -r line; do $SUDO usermod -p '!!' \$(echo \$line | cut -d: -f1); done || echo 'Shadow password check'"
+    "awk -F: '(\$2 != \"x\") {print}' /etc/passwd | while read -r line; do $SUDO usermod -p '!!' \$(echo \$line | cut -d: -f1); done || echo 'Shadow password check'"
 
 apply_cis_control "6.2.2" "Ensure /etc/shadow password fields are not empty" \
-    "$SUDO awk -F: '(\$2 == \"\" || \$2 == \"!\") {print \$1}' /etc/shadow | while read -r user; do $SUDO passwd -l \"\$user\"; done || echo 'Empty password check'"
+    "awk -F: '(\$2 == \"\" || \$2 == \"!\") {print \$1}' /etc/shadow | while read -r user; do $SUDO passwd -l \"\$user\"; done || echo 'Empty password check'"
 
 apply_cis_control "6.2.3" "Ensure all groups in /etc/passwd exist in /etc/group" \
-    "$SUDO for i in \$(cut -s -d: -f4 /etc/passwd | sort -u); do grep -q -P \"^.*?:[^:]*:\$i:\" /etc/group || echo \"Group \$i is referenced by /etc/passwd but does not exist in /etc/group\"; done || echo 'Group consistency check'"
+    "$SUDO bash -c 'for i in \$(cut -s -d: -f4 /etc/passwd | sort -u); do grep -q -P \"^.*?:[^:]*:\$i:\" /etc/group || echo \"Group \$i is referenced by /etc/passwd but does not exist in /etc/group\"; done || echo \"Group consistency check\"'"
 
 apply_cis_control "6.2.4" "Ensure all users' home directories exist" \
-    "$SUDO awk -F: '{print \$1, \$6}' /etc/passwd | while read -r user dir; do if [ ! -d \"\$dir\" ]; then $SUDO mkdir -p \"\$dir\"; $SUDO chown \"\$user\" \"\$dir\"; fi; done || echo 'Home directory check'"
+    "awk -F: '{print \$1, \$6}' /etc/passwd | while read -r user dir; do if [ ! -d \"\$dir\" ]; then $SUDO mkdir -p \"\$dir\"; $SUDO chown \"\$user\" \"\$dir\"; fi; done || echo 'Home directory check'"
 
 apply_cis_control "6.2.5" "Ensure users' home directories permissions are 750 or more restrictive" \
-    "$SUDO awk -F: '{print \$6}' /etc/passwd | while read -r dir; do if [ -d \"\$dir\" ]; then $SUDO chmod 750 \"\$dir\"; fi; done || echo 'Home directory permissions'"
+    "awk -F: '{print \$6}' /etc/passwd | while read -r dir; do if [ -d \"\$dir\" ]; then $SUDO chmod 750 \"\$dir\"; fi; done || echo 'Home directory permissions'"
 
 apply_cis_control "6.2.6" "Ensure users own their home directories" \
-    "$SUDO awk -F: '{print \$1, \$6}' /etc/passwd | while read -r user dir; do if [ -d \"\$dir\" ]; then $SUDO chown \"\$user\" \"\$dir\"; fi; done || echo 'Home directory ownership'"
+    "awk -F: '{print \$1, \$6}' /etc/passwd | while read -r user dir; do if [ -d \"\$dir\" ]; then $SUDO chown \"\$user\" \"\$dir\"; fi; done || echo 'Home directory ownership'"
 
 apply_cis_control "6.2.7" "Ensure users' dot files are not group or world writable" \
     "$SUDO find /home -name \".*\" -type f -perm /022 -exec chmod go-w {} + || echo 'Dot files permissions'"
@@ -577,31 +577,31 @@ apply_cis_control "6.2.11" "Ensure no users have .rhosts files" \
     "$SUDO find /home -name \".rhosts\" -type f -delete || echo 'Rhosts files check'"
 
 apply_cis_control "6.2.12" "Ensure all groups in /etc/group exist in /etc/passwd" \
-    "$SUDO for group in \$(cut -s -d: -f3 /etc/group); do grep -q -P \"^.*?:[^:]*:[^:]*:\$group:\" /etc/passwd || echo \"Group \$group exists in /etc/group but not in /etc/passwd\"; done || echo 'Group consistency check'"
+    "$SUDO bash -c 'for group in \$(cut -s -d: -f3 /etc/group); do grep -q -P \"^.*?:[^:]*:[^:]*:\$group:\" /etc/passwd || echo \"Group \$group exists in /etc/group but not in /etc/passwd\"; done || echo \"Group consistency check\"'"
 
 apply_cis_control "6.2.13" "Ensure root is the only UID 0 account" \
-    "$SUDO awk -F: '(\$3 == 0 && \$1 != \"root\") {print}' /etc/passwd | while read -r line; do user=\$(echo \$line | cut -d: -f1); $SUDO userdel \"\$user\"; done || echo 'UID 0 check'"
+    "awk -F: '(\$3 == 0 && \$1 != \"root\") {print}' /etc/passwd | while read -r line; do user=\$(echo \$line | cut -d: -f1); $SUDO userdel \"\$user\"; done || echo 'UID 0 check'"
 
 apply_cis_control "6.2.14" "Ensure root PATH Integrity" \
-    "$SUDO echo 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' > /root/.bashrc && $SUDO echo 'export PATH' >> /root/.bashrc || echo 'Root PATH'"
+    "$SUDO bash -c \"echo 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' > /root/.bashrc && echo 'export PATH' >> /root/.bashrc\" || echo 'Root PATH'"
 
 apply_cis_control "6.2.15" "Ensure all interactive users have home directories" \
-    "$SUDO awk -F: '{if (\$7 !~ /nologin/ && \$6 == \"/\") print \$1}' /etc/passwd | while read -r user; do $SUDO mkdir -p \"/home/\$user\"; $SUDO chown \"\$user\" \"/home/\$user\"; done || echo 'Interactive users home'"
+    "awk -F: '{if (\$7 !~ /nologin/ && \$6 == \"/\") print \$1}' /etc/passwd | while read -r user; do $SUDO mkdir -p \"/home/\$user\"; $SUDO chown \"\$user\" \"/home/\$user\"; done || echo 'Interactive users home'"
 
 apply_cis_control "6.2.16" "Ensure users' home directories are not group or world writable" \
     "$SUDO find /home -type d -perm /022 -exec chmod go-w {} + || echo 'Home directories writable'"
 
 apply_cis_control "6.2.17" "Ensure no duplicate UIDs exist" \
-    "$SUDO cut -f3 -d\":\" /etc/passwd | sort -n | uniq -d | while read -r uid; do $SUDO awk -F: '\$3 == \"\$uid\" {print \$1}' /etc/passwd; done || echo 'Duplicate UID check'"
+    "cut -f3 -d\":\" /etc/passwd | sort -n | uniq -d | while read -r uid; do awk -F: '\$3 == \"\$uid\" {print \$1}' /etc/passwd; done || echo 'Duplicate UID check'"
 
 apply_cis_control "6.2.18" "Ensure no duplicate GIDs exist" \
-    "$SUDO cut -f3 -d\":\" /etc/group | sort -n | uniq -d | while read -r gid; do $SUDO awk -F: '\$3 == \"\$gid\" {print \$1}' /etc/group; done || echo 'Duplicate GID check'"
+    "cut -f3 -d\":\" /etc/group | sort -n | uniq -d | while read -r gid; do awk -F: '\$3 == \"\$gid\" {print \$1}' /etc/group; done || echo 'Duplicate GID check'"
 
 apply_cis_control "6.2.19" "Ensure no duplicate user names exist" \
-    "$SUDO cut -f1 -d\":\" /etc/passwd | sort | uniq -d || echo 'Duplicate username check'"
+    "cut -f1 -d\":\" /etc/passwd | sort | uniq -d || echo 'Duplicate username check'"
 
 apply_cis_control "6.2.20" "Ensure no duplicate group names exist" \
-    "$SUDO cut -f1 -d\":\" /etc/group | sort | uniq -d || echo 'Duplicate group name check'"
+    "cut -f1 -d\":\" /etc/group | sort | uniq -d || echo 'Duplicate group name check'"
 
 echo ""
 echo -e "${GREEN}=== CIS Level 2 Hardening Complete ===${NC}"
