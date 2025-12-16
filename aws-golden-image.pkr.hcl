@@ -49,6 +49,24 @@ variable "security_group_ids" {
   default     = []
 }
 
+variable "cis_s3_bucket" {
+  type        = string
+  description = "S3 bucket name containing CIS tools (optional - CIS hardening will be skipped if not provided)"
+  default     = ""
+}
+
+variable "cis_s3_prefix" {
+  type        = string
+  description = "S3 prefix/path for CIS tools (default: cis-tools)"
+  default     = "cis-tools"
+}
+
+variable "enable_cis_hardening" {
+  type        = bool
+  description = "Enable CIS Level 2 hardening (requires cis_s3_bucket to be set)"
+  default     = true
+}
+
 data "amazon-ami" "amazonlinux2023" {
   filters = {
     name                = "al2023-ami-*-x86_64"
@@ -160,10 +178,48 @@ build {
     ]
   }
   
-  # Provisioning: Configure SSH (optional - harden SSH)
+  # Provisioning: Install AWS CLI (required for CIS tools download from S3)
   provisioner "shell" {
     inline = [
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+      "if ! command -v aws >/dev/null 2>&1; then",
+      "  echo 'Installing AWS CLI...'",
+      "  $${SUDO} curl -fsSL 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o /tmp/awscliv2.zip || echo 'AWS CLI download failed'",
+      "  $${SUDO} unzip -q /tmp/awscliv2.zip -d /tmp || echo 'AWS CLI extraction failed'",
+      "  $${SUDO} /tmp/aws/install || echo 'AWS CLI installation failed'",
+      "  $${SUDO} rm -rf /tmp/awscliv2.zip /tmp/aws || true",
+      "fi"
+    ]
+  }
+
+  # Provisioning: Download CIS tools from S3 (if bucket is configured)
+  provisioner "shell" {
+    environment_vars = [
+      "CIS_S3_BUCKET=${var.cis_s3_bucket}",
+      "CIS_S3_PREFIX=${var.cis_s3_prefix}",
+      "AWS_REGION=${var.aws_region}"
+    ]
+    script = "scripts/cis/download-cis-tools.sh"
+    only_if = "${var.enable_cis_hardening && var.cis_s3_bucket != ""}"
+  }
+
+  # Provisioning: Apply CIS Level 2 Hardening
+  provisioner "shell" {
+    script = "scripts/cis/cis-level2-hardening.sh"
+    only_if = "${var.enable_cis_hardening}"
+  }
+
+  # Provisioning: Run CIS Assessment (optional - runs assessment tools if available)
+  provisioner "shell" {
+    script = "scripts/cis/run-cis-assessment.sh"
+    only_if = "${var.enable_cis_hardening && var.cis_s3_bucket != ""}"
+  }
+
+  # Provisioning: Configure SSH (CIS hardening may have already configured this)
+  provisioner "shell" {
+    inline = [
+      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+      "# SSH hardening (if not already done by CIS hardening)",
       "$${SUDO} sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config || true",
       "$${SUDO} sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
       "$${SUDO} sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",

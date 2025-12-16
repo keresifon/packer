@@ -28,6 +28,9 @@ env:
   PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || github.event.inputs.iam_instance_profile || '' }}
   PKR_VAR_vpc_id: ${{ vars.VPC_ID || '' }}
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || '' }}
+  PKR_VAR_cis_s3_bucket: ${{ vars.CIS_S3_BUCKET || '' }}
+  PKR_VAR_cis_s3_prefix: ${{ vars.CIS_S3_PREFIX || 'cis-tools' }}
+  PKR_VAR_enable_cis_hardening: ${{ vars.ENABLE_CIS_HARDENING || 'true' }}
 
 jobs:
   validate:
@@ -392,6 +395,9 @@ jobs:
           [ -n "${{ env.PKR_VAR_iam_instance_profile }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
           [ -n "${{ env.PKR_VAR_vpc_id }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"vpc_id=${{ env.PKR_VAR_vpc_id }}\""
           [ -n "${{ env.PKR_VAR_subnet_id }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"subnet_id=${{ env.PKR_VAR_subnet_id }}\""
+          [ -n "${{ env.PKR_VAR_cis_s3_bucket }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"cis_s3_bucket=${{ env.PKR_VAR_cis_s3_bucket }}\""
+          [ -n "${{ env.PKR_VAR_cis_s3_prefix }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"cis_s3_prefix=${{ env.PKR_VAR_cis_s3_prefix }}\""
+          [ -n "${{ env.PKR_VAR_enable_cis_hardening }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"enable_cis_hardening=${{ env.PKR_VAR_enable_cis_hardening }}\""
           SECURITY_GROUP_IDS="${{ vars.SECURITY_GROUP_IDS }}"
           if [ -n "$SECURITY_GROUP_IDS" ]; then
             SG_HCL=$(echo "$SECURITY_GROUP_IDS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//' | sed 's/^/[/;s/$/]/')
