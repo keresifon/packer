@@ -88,6 +88,12 @@ source "amazon-ebs" "amazonlinux2023" {
   ssh_username = "ec2-user"
   ssh_interface = "session_manager"
   
+  # Note: Packer may still create a temporary keypair when using Session Manager
+  # This is a fallback mechanism, but Session Manager handles the actual connection
+  # The keypair is created but not used - Session Manager uses IAM authentication instead
+  # Setting temporary_key_pair_name to empty string attempts to disable it
+  temporary_key_pair_name = ""
+  
   iam_instance_profile = var.iam_instance_profile != "" ? var.iam_instance_profile : null
   
   user_data = base64encode(<<-EOF
@@ -139,10 +145,15 @@ build {
   provisioner "shell" {
     inline = [
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+      "# Clean DNF cache aggressively to prevent corruption",
+      "$${SUDO} rm -rf /var/cache/dnf/* 2>/dev/null || true",
+      "$${SUDO} dnf clean all || true",
+      "$${SUDO} dnf clean packages || true",
+      "$${SUDO} dnf clean metadata || true",
       "# Update system packages (use --allowerasing to handle curl-minimal conflicts)",
-      "$${SUDO} dnf update -y --allowerasing",
-      "$${SUDO} dnf upgrade -y --allowerasing",
-      "$${SUDO} dnf clean all"
+      "$${SUDO} dnf update -y --allowerasing --setopt=keepcache=0 --setopt=metadata_expire=0",
+      "$${SUDO} dnf upgrade -y --allowerasing --setopt=keepcache=0 --setopt=metadata_expire=0",
+      "$${SUDO} dnf clean all || true"
     ]
   }
   
@@ -150,10 +161,14 @@ build {
   provisioner "shell" {
     inline = [
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+      "# Clean DNF cache before each install to prevent corruption",
+      "$${SUDO} rm -rf /var/cache/dnf/* 2>/dev/null || true",
       "# Install common utilities (--allowerasing replaces curl-minimal with full curl)",
-      "$${SUDO} dnf install -y --allowerasing curl wget git unzip",
-      "$${SUDO} dnf install -y htop net-tools",
-      "$${SUDO} dnf install -y jq || echo 'Warning: jq installation skipped'"
+      "$${SUDO} dnf install -y --allowerasing --setopt=keepcache=0 --setopt=metadata_expire=0 curl wget git unzip",
+      "$${SUDO} rm -rf /var/cache/dnf/* 2>/dev/null || true",
+      "$${SUDO} dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 htop net-tools",
+      "$${SUDO} rm -rf /var/cache/dnf/* 2>/dev/null || true",
+      "$${SUDO} dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 jq || echo 'Warning: jq installation skipped'"
     ]
   }
   
@@ -163,7 +178,8 @@ build {
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
       "if ! command -v amazon-ssm-agent >/dev/null 2>&1; then",
       "  echo 'SSM Agent not found, installing...'",
-      "  $${SUDO} dnf install -y amazon-ssm-agent || echo 'Warning: Failed to install SSM Agent'",
+      "  $${SUDO} rm -rf /var/cache/dnf/* 2>/dev/null || true",
+      "  $${SUDO} dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 amazon-ssm-agent || echo 'Warning: Failed to install SSM Agent'",
       "fi",
       "if $${SUDO} systemctl list-unit-files | grep -q amazon-ssm-agent.service; then",
       "  echo 'SSM Agent service found'",
