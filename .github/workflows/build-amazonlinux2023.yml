@@ -34,7 +34,7 @@ on:
       - amazonlinux2023-vpc-private-subnet
 
 env:
-  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region }}
   TARGET_REGIONS: ${{ github.event.inputs.target_regions || '' }}
   STORE_IN_PARAMETER_STORE: ${{ github.event.inputs.store_in_parameter_store || 'true' }}
   # VPC Configuration from GitHub Variables/Secrets
