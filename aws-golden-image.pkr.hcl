@@ -216,6 +216,7 @@ build {
 
   # Provisioning: Apply CIS Level 2 Hardening
   # Note: CIS tools (OpenSCAP, SCAP content) are downloaded in the separate assessment job, not during build
+  # The script self-deletes at the end to prevent Packer cleanup errors
   provisioner "shell" {
     environment_vars = [
       "ENABLE_CIS_HARDENING=${var.enable_cis_hardening}"

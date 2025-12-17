@@ -11,7 +11,21 @@ cleanup() {
     local exit_code=$?
     # Flush output buffers (use full path to sync)
     /usr/bin/sync 2>/dev/null || /bin/sync 2>/dev/null || true
-    # Exit with the original exit code
+    
+    # Self-delete script file if it's a Packer temporary script
+    # This prevents Packer's "Error removing temporary script" error
+    # Use a background process to delete after script fully exits
+    SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+    if [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
+        if [[ "$SCRIPT_PATH" == /tmp/script_*.sh ]] || [[ "$SCRIPT_PATH" == /tmp/packer-shell* ]]; then
+            # Delete in background to avoid blocking exit
+            (sleep 0.2; rm -f "$SCRIPT_PATH" 2>/dev/null) &
+            # Also try immediate deletion (may fail if file is still open, but background will catch it)
+            rm -f "$SCRIPT_PATH" 2>/dev/null || true
+        fi
+    fi
+    
+    # Exit with the original exit code (preserve success)
     exit $exit_code
 }
 
@@ -640,6 +654,6 @@ echo "It is recommended to run CIS assessment tools to verify compliance."
 # Use full path to sync (coreutils) and make non-fatal
 /usr/bin/sync 2>/dev/null || /bin/sync 2>/dev/null || true
 
-# Exit cleanly - trap will handle cleanup
+# Exit cleanly - trap cleanup function will handle script self-deletion
 exit 0
 
