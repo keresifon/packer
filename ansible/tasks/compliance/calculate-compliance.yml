@@ -14,7 +14,7 @@
       - "{{ bootloader_check.stdout | default('PASS') }}"
       - "{{ coredump_check.stdout }}"
       - "{{ aslr_check.stdout }}"
-      - "{{ 'PASS' if apparmor_check.rc == 0 else 'FAIL' }}"
+      - "{{ mac_check_result | default('FAIL') }}"
       - "{{ ip_forward_check.stdout }}"
       - "{{ syn_cookies_check.stdout }}"
       - "{{ rsyslog_status }}"
@@ -26,7 +26,7 @@
       - { name: "CIS 1.4 - Bootloader password protection", status: "{{ bootloader_check.stdout | default('PASS') }}" }
       - { name: "CIS 1.5.1 - Core dumps restricted", status: "{{ coredump_check.stdout }}" }
       - { name: "CIS 1.5.3 - ASLR enabled", status: "{{ aslr_check.stdout }}" }
-      - { name: "CIS 1.6.1.1 - AppArmor installed", status: "{{ 'PASS' if apparmor_check.rc == 0 else 'FAIL' }}" }
+      - { name: "CIS 1.6.1.1 - MAC installed (AppArmor/SELinux)", status: "{{ mac_check_result | default('FAIL') }}" }
       - { name: "CIS 3.1.1 - IP forwarding disabled", status: "{{ ip_forward_check.stdout }}" }
       - { name: "CIS 3.1.2 - SYN cookies enabled", status: "{{ syn_cookies_check.stdout }}" }
       - { name: "CIS 4.1 - rsyslog configured", status: "{{ rsyslog_status }}" }

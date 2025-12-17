@@ -1,11 +1,19 @@
 ---
 # CIS 4.1 - Configure Logging
 # Configures system logging
+# Supports Ubuntu 22.04 LTS and Amazon Linux 2023
 
-- name: Install rsyslog
+- name: Install rsyslog (Ubuntu/Debian)
   apt:
     name: rsyslog
     state: present
+  when: ansible_os_family == "Debian"
+
+- name: Install rsyslog (Amazon Linux/RHEL)
+  dnf:
+    name: rsyslog
+    state: present
+  when: ansible_os_family == "RedHat"
 
 - name: Enable rsyslog service
   systemd:
@@ -46,4 +54,3 @@
     regexp: '^#?Storage='
     line: 'Storage=persistent'
   when: (cis_level | default(cis_level_default) | int) >= 2
-

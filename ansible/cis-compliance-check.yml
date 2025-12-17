@@ -1,9 +1,10 @@
 ---
 # CIS Compliance Check Playbook
 # Validates CIS benchmark compliance and optionally fails build if threshold not met
+# Supports Ubuntu 22.04 LTS and Amazon Linux 2023
 # Modular version using task files
 
-- name: CIS Ubuntu 22.04 LTS Compliance Check
+- name: CIS Compliance Check
   hosts: all
   become: yes
   gather_facts: yes
@@ -19,13 +20,28 @@
       set_fact:
         cis_level: "{{ (cis_level | default(cis_level_default)) | int }}"
 
-    - name: Install compliance checking tools
+    - name: Detect OS family and set package manager
+      set_fact:
+        pkg_manager: "{{ 'apt' if ansible_os_family == 'Debian' else 'dnf' }}"
+        os_family: "{{ ansible_os_family }}"
+        os_distribution: "{{ ansible_distribution }}"
+
+    - name: Install compliance checking tools (Ubuntu/Debian)
       apt:
         name:
           - python3-pip
           - jq
         state: present
         update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install compliance checking tools (Amazon Linux/RHEL)
+      dnf:
+        name:
+          - python3-pip
+          - jq
+        state: present
+      when: ansible_os_family == "RedHat"
 
   tasks:
     - name: CIS 1.1 Compliance Checks - Filesystem

@@ -1,22 +1,53 @@
 ---
 # CIS 1.6 - Mandatory Access Control
-# Configures AppArmor for MAC
+# Configures MAC (AppArmor for Ubuntu, SELinux for Amazon Linux/RHEL)
+# Supports Ubuntu 22.04 LTS and Amazon Linux 2023
 
-- name: Install AppArmor
+# Ubuntu/Debian: AppArmor Configuration
+- name: Install AppArmor (Ubuntu/Debian)
   apt:
     name:
       - apparmor
       - apparmor-utils
     state: present
+  when: ansible_os_family == "Debian"
 
-- name: Enable AppArmor in bootloader
+- name: Enable AppArmor in bootloader (Ubuntu/Debian)
   lineinfile:
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX='
     line: 'GRUB_CMDLINE_LINUX="apparmor=1 security=apparmor"'
     backup: yes
+  when: ansible_os_family == "Debian"
 
-- name: Update grub configuration
+- name: Update grub configuration (Ubuntu/Debian)
   command: update-grub
-  when: ansible_facts['os_family'] == "Debian"
+  when: ansible_os_family == "Debian"
 
+# Amazon Linux/RHEL: SELinux Configuration
+- name: Ensure SELinux is installed (Amazon Linux/RHEL)
+  dnf:
+    name: libselinux
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure SELinux is not disabled in bootloader (Amazon Linux/RHEL)
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX='
+    line: 'GRUB_CMDLINE_LINUX="selinux=1 enforcing=1"'
+    backup: yes
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure SELinux policy is configured (Amazon Linux/RHEL)
+  lineinfile:
+    path: /etc/selinux/config
+    regexp: '^SELINUXTYPE='
+    line: 'SELINUXTYPE=targeted'
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure SELinux is enabled (Amazon Linux/RHEL)
+  selinux:
+    state: enforcing
+    policy: targeted
+  when: ansible_os_family == "RedHat"

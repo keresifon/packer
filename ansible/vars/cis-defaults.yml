@@ -1,5 +1,6 @@
 ---
-# CIS Ubuntu 22.04 LTS Benchmark Default Variables
+# CIS Benchmark Default Variables
+# Supports Ubuntu 22.04 LTS and Amazon Linux 2023
 # These variables can be overridden when calling the playbook
 
 # CIS Benchmark Level (1 = Level 1, 2 = Level 2)

@@ -1,11 +1,19 @@
 ---
 # CIS 5.1 - Configure Time Synchronization
 # Configures time synchronization service
+# Supports Ubuntu 22.04 LTS and Amazon Linux 2023
 
-- name: Install chrony
+- name: Install chrony (Ubuntu/Debian)
   apt:
     name: chrony
     state: present
+  when: ansible_os_family == "Debian"
+
+- name: Install chrony (Amazon Linux/RHEL)
+  dnf:
+    name: chrony
+    state: present
+  when: ansible_os_family == "RedHat"
 
 - name: Enable chrony service
   systemd:
@@ -16,4 +24,3 @@
 - name: Set timezone to UTC
   timezone:
     name: UTC
-

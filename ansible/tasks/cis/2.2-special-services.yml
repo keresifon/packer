@@ -1,116 +1,291 @@
 ---
 # CIS 2.2 - Special Purpose Services
 # Removes unnecessary special purpose services
+# Supports Ubuntu 22.04 LTS and Amazon Linux 2023
 
-- name: Remove NIS client
+- name: Remove NIS client (Ubuntu/Debian)
   apt:
     name: nis
     state: absent
+  when: ansible_os_family == "Debian"
 
-- name: Remove rsh client
+- name: Remove NIS client (Amazon Linux/RHEL)
+  dnf:
+    name: ypbind
+    state: absent
+  when: ansible_os_family == "RedHat"
+
+- name: Remove rsh client (Ubuntu/Debian)
   apt:
     name: rsh-client
     state: absent
+  when: ansible_os_family == "Debian"
 
-- name: Remove talk client
+- name: Remove rsh client (Amazon Linux/RHEL)
+  dnf:
+    name: rsh
+    state: absent
+  when: ansible_os_family == "RedHat"
+
+- name: Remove talk client (Ubuntu/Debian)
   apt:
     name: talk
     state: absent
+  when: ansible_os_family == "Debian"
 
-- name: Remove telnet client
+- name: Remove talk client (Amazon Linux/RHEL)
+  dnf:
+    name: talk
+    state: absent
+  when: ansible_os_family == "RedHat"
+
+- name: Remove telnet client (Ubuntu/Debian)
   apt:
     name: telnet
     state: absent
+  when: ansible_os_family == "Debian"
 
-- name: Remove LDAP client
+- name: Remove telnet client (Amazon Linux/RHEL)
+  dnf:
+    name: telnet
+    state: absent
+  when: ansible_os_family == "RedHat"
+
+- name: Remove LDAP client (Ubuntu/Debian)
   apt:
     name: ldap-utils
     state: absent
+  when: ansible_os_family == "Debian"
+
+- name: Remove LDAP client (Amazon Linux/RHEL)
+  dnf:
+    name: openldap-clients
+    state: absent
+  when: ansible_os_family == "RedHat"
 
 # Level 2: Additional service removals
-- name: Remove RPC (Level 2)
+- name: Remove RPC (Level 2) (Ubuntu/Debian)
   apt:
     name: rpcbind
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when: 
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove Avahi server (Level 2)
+- name: Remove RPC (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: rpcbind
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove Avahi server (Level 2) (Ubuntu/Debian)
   apt:
     name: avahi-daemon
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove CUPS (Level 2)
+- name: Remove Avahi server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: avahi-daemon
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove CUPS (Level 2) (Ubuntu/Debian)
   apt:
     name: cups
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove DHCP server (Level 2)
+- name: Remove CUPS (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: cups
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove DHCP server (Level 2) (Ubuntu/Debian)
   apt:
     name: isc-dhcp-server
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove DNS server (Level 2)
+- name: Remove DHCP server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: dhcp-server
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove DNS server (Level 2) (Ubuntu/Debian)
   apt:
     name: bind9
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove FTP server (Level 2)
+- name: Remove DNS server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: bind
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove FTP server (Level 2) (Ubuntu/Debian)
   apt:
     name: vsftpd
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove HTTP server (Level 2)
+- name: Remove FTP server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: vsftpd
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove HTTP server (Level 2) (Ubuntu/Debian)
   apt:
     name: apache2
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove IMAP and POP3 server (Level 2)
+- name: Remove HTTP server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: httpd
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove IMAP and POP3 server (Level 2) (Ubuntu/Debian)
   apt:
     name:
       - dovecot-imapd
       - dovecot-pop3d
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove Samba (Level 2)
+- name: Remove IMAP and POP3 server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: dovecot
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove Samba (Level 2) (Ubuntu/Debian)
   apt:
     name: samba
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove HTTP proxy server (Level 2)
+- name: Remove Samba (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: samba
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove HTTP proxy server (Level 2) (Ubuntu/Debian)
   apt:
     name: squid
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove SNMP server (Level 2)
+- name: Remove HTTP proxy server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: squid
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove SNMP server (Level 2) (Ubuntu/Debian)
   apt:
     name: snmpd
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove NIS server (Level 2)
+- name: Remove SNMP server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: net-snmp
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove NIS server (Level 2) (Ubuntu/Debian)
   apt:
     name: nis
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove rsh server (Level 2)
+- name: Remove NIS server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: ypserv
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove rsh server (Level 2) (Ubuntu/Debian)
   apt:
     name: rsh-server
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
 
-- name: Remove rsync server (Level 2)
+- name: Remove rsh server (Level 2) (Amazon Linux/RHEL)
+  dnf:
+    name: rsh-server
+    state: absent
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
+
+- name: Remove rsync server (Level 2) (Ubuntu/Debian)
   apt:
     name: rsync
     state: absent
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
+  # Note: rsync is often needed, consider skipping this for Amazon Linux
 
+- name: Remove rsync server (Level 2) (Amazon Linux/RHEL) - Skip
+  debug:
+    msg: "Skipping rsync removal on Amazon Linux/RHEL as it may be required for system operations"
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"

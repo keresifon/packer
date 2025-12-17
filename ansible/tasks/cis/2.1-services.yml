@@ -1,14 +1,28 @@
 ---
 # CIS 2.1 - Services
 # Removes unnecessary services
+# Supports Ubuntu 22.04 LTS and Amazon Linux 2023
 
-- name: Remove xinetd
+- name: Remove xinetd (Ubuntu/Debian)
   apt:
     name: xinetd
     state: absent
+  when: ansible_os_family == "Debian"
 
-- name: Remove xorg-x11-server-common
+- name: Remove xinetd (Amazon Linux/RHEL)
+  dnf:
+    name: xinetd
+    state: absent
+  when: ansible_os_family == "RedHat"
+
+- name: Remove X Window System (Ubuntu/Debian)
   apt:
     name: xorg-x11-server-common
     state: absent
+  when: ansible_os_family == "Debian"
 
+- name: Remove X Window System (Amazon Linux/RHEL)
+  dnf:
+    name: xorg-x11-server-Xorg
+    state: absent
+  when: ansible_os_family == "RedHat"

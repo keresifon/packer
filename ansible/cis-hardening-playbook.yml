@@ -1,9 +1,10 @@
 ---
-# CIS Ubuntu 22.04 LTS Benchmark Hardening Playbook
+# CIS Benchmark Hardening Playbook
+# Supports Ubuntu 22.04 LTS and Amazon Linux 2023
 # Modular version using task files
 # This playbook applies CIS benchmark recommendations using Ansible
 
-- name: CIS Ubuntu 22.04 LTS Benchmark Hardening
+- name: CIS Benchmark Hardening
   hosts: all
   become: yes
   gather_facts: yes
@@ -20,11 +21,23 @@
       set_fact:
         cis_skip_sections: "{{ cis_skip_sections | default([]) }}"
 
-    - name: Ensure Python is available
+    - name: Detect OS family and set package manager
+      set_fact:
+        pkg_manager: "{{ 'apt' if ansible_os_family == 'Debian' else 'dnf' }}"
+        os_family: "{{ ansible_os_family }}"
+        os_distribution: "{{ ansible_distribution }}"
+
+    - name: Ensure Python is available (Ubuntu/Debian)
       raw: test -e /usr/bin/python3 || (apt-get update && apt-get install -y python3)
       changed_when: false
+      when: ansible_os_family == "Debian"
 
-    - name: Install required system packages
+    - name: Ensure Python is available (Amazon Linux/RHEL)
+      raw: test -e /usr/bin/python3 || (dnf install -y python3)
+      changed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Install required system packages (Ubuntu/Debian)
       apt:
         name:
           - python3-pip
@@ -32,6 +45,16 @@
           - git
         state: present
         update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install required system packages (Amazon Linux/RHEL)
+      dnf:
+        name:
+          - python3-pip
+          - python3-setuptools
+          - git
+        state: present
+      when: ansible_os_family == "RedHat"
 
   tasks:
     - name: CIS 1.1 - Filesystem Configuration
@@ -93,4 +116,4 @@
   post_tasks:
     - name: Display CIS hardening completion message
       debug:
-        msg: "CIS Ubuntu 22.04 LTS Benchmark Level {{ cis_level }} hardening completed successfully"
+        msg: "CIS {{ ansible_distribution }} {{ ansible_distribution_version }} Benchmark Level {{ cis_level }} hardening completed successfully"
