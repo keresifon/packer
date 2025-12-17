@@ -1,4 +1,4 @@
-name: Build Amazon Linux 2023 Golden Image
+name: Build Amazon Linux 2023 Golden Image Hardened
 
 on:
   workflow_dispatch:
