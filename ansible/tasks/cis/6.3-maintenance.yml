@@ -23,6 +23,7 @@
     owner: root
     group: root
     mode: '0700'
+    state: directory
   when: (cis_level | default(cis_level_default) | int) >= 2
 
 - name: Ensure permissions on /etc/cron.daily are configured (Level 2)
