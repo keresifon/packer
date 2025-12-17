@@ -103,23 +103,23 @@ jobs:
           VPC_ID="${PKR_VAR_vpc_id:-}"
           SUBNET_ID="${PKR_VAR_subnet_id:-}"
           
-          # Build validation command
-          VALIDATE_CMD="packer validate"
-          VALIDATE_CMD="$VALIDATE_CMD -var=\"iam_instance_profile=$IAM_PROFILE\""
-          VALIDATE_CMD="$VALIDATE_CMD -var=\"ssh_username=ec2-user\""
+          # Build validation command array to avoid quote escaping issues
+          VALIDATE_ARGS=("validate")
+          VALIDATE_ARGS+=("-var" "iam_instance_profile=$IAM_PROFILE")
+          VALIDATE_ARGS+=("-var" "ssh_username=ec2-user")
           
           # Add VPC config if provided (optional for validation)
           if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "" ]; then
-            VALIDATE_CMD="$VALIDATE_CMD -var=\"vpc_id=$VPC_ID\""
+            VALIDATE_ARGS+=("-var" "vpc_id=$VPC_ID")
           fi
           if [ -n "$SUBNET_ID" ] && [ "$SUBNET_ID" != "" ]; then
-            VALIDATE_CMD="$VALIDATE_CMD -var=\"subnet_id=$SUBNET_ID\""
+            VALIDATE_ARGS+=("-var" "subnet_id=$SUBNET_ID")
           fi
           
           # Note: security_group_ids is skipped during validation as it's a list type
           # and not required for template validation
           
-          $VALIDATE_CMD amazonlinux2023-golden-image.pkr.hcl
+          packer "${VALIDATE_ARGS[@]}" amazonlinux2023-golden-image.pkr.hcl
 
   build:
     name: Build AMI
