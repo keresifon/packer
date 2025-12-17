@@ -41,11 +41,13 @@ echo "=== CIS Level 2 Hardening for Amazon Linux 2023 ==="
 
 # Clean DNF cache at the start to prevent corruption issues
 echo "Cleaning DNF cache before CIS hardening..."
+$SUDO mkdir -p /var/cache/dnf
+$SUDO find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true
+$SUDO find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true
 $SUDO dnf clean all || true
 $SUDO dnf clean packages || true
 $SUDO dnf clean metadata || true
 $SUDO dnf clean expire-cache || true
-$SUDO rm -rf /var/cache/dnf/* 2>/dev/null || true
 
 # Function to apply CIS control
 apply_cis_control() {
@@ -91,7 +93,7 @@ echo "=== 1.3 Filesystem Integrity Checking ==="
 
 # 1.3.1 Ensure AIDE is installed
 apply_cis_control "1.3.1" "Install AIDE" \
-    "$SUDO rm -rf /var/cache/dnf/* 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 aide || echo 'AIDE installation skipped'"
+    "$SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 aide || echo 'AIDE installation skipped'"
 
 # 1.3.2 Ensure filesystem integrity is regularly checked
 if command -v aide >/dev/null 2>&1; then
@@ -132,7 +134,7 @@ echo "=== 1.6 Mandatory Access Control ==="
 
 # 1.6.1 Configure SELinux
 apply_cis_control "1.6.1.1" "Ensure SELinux is installed" \
-    "$SUDO rm -rf /var/cache/dnf/* 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 libselinux || echo 'SELinux already installed'"
+    "$SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 libselinux || echo 'SELinux already installed'"
 
 apply_cis_control "1.6.1.2" "Ensure SELinux is not disabled in bootloader" \
     "$SUDO sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=\".*selinux=0.*\"/GRUB_CMDLINE_LINUX_DEFAULT=\"\"/' /etc/default/grub || true"
@@ -225,7 +227,7 @@ echo ""
 echo "=== 2.2 Special Purpose Services ==="
 
 apply_cis_control "2.2.1" "Ensure time synchronization is in use" \
-    "$SUDO rm -rf /var/cache/dnf/* 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 chrony || echo 'chrony installation'"
+    "$SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 chrony || echo 'chrony installation'"
 
 apply_cis_control "2.2.1.1" "Ensure chrony is configured" \
     "$SUDO systemctl enable chronyd && $SUDO systemctl start chronyd || echo 'chrony configuration'"
@@ -319,7 +321,7 @@ echo ""
 echo "=== 3.3 Firewall Configuration ==="
 
 apply_cis_control "3.3.1" "Ensure firewalld is installed" \
-    "if rpm -q firewalld >/dev/null 2>&1; then echo 'firewalld already installed'; else echo 'Installing firewalld...'; $SUDO rm -rf /var/cache/dnf/* 2>/dev/null || true; if timeout 600 $SUDO dnf install -y --setopt=keepcache=0 --setopt=timeout=300 --setopt=retries=3 --setopt=metadata_expire=0 firewalld >/dev/null 2>&1; then echo 'firewalld installed successfully'; else echo 'firewalld installation failed or timed out'; exit 1; fi; fi"
+    "if rpm -q firewalld >/dev/null 2>&1; then echo 'firewalld already installed'; else echo 'Installing firewalld...'; $SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; if timeout 600 $SUDO dnf install -y --setopt=keepcache=0 --setopt=timeout=300 --setopt=retries=3 --setopt=metadata_expire=0 firewalld >/dev/null 2>&1; then echo 'firewalld installed successfully'; else echo 'firewalld installation failed or timed out'; exit 1; fi; fi"
 
 apply_cis_control "3.3.2" "Ensure iptables is not installed" \
     "$SUDO dnf remove -y iptables-services 2>/dev/null || echo 'iptables-services not installed'"
@@ -335,7 +337,7 @@ echo ""
 echo "=== 3.4 Logging and Auditing ==="
 
 apply_cis_control "3.4.1" "Ensure rsyslog is installed" \
-    "$SUDO rm -rf /var/cache/dnf/* 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 rsyslog || echo 'rsyslog installation'"
+    "$SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 rsyslog || echo 'rsyslog installation'"
 
 apply_cis_control "3.4.2" "Ensure rsyslog service is enabled and running" \
     "$SUDO systemctl enable rsyslog && $SUDO systemctl start rsyslog || echo 'rsyslog service'"
@@ -345,7 +347,7 @@ echo ""
 echo "=== 4.1 Configure System Accounting ==="
 
 apply_cis_control "4.1.1" "Ensure auditd is installed" \
-    "$SUDO rm -rf /var/cache/dnf/* 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 audit || echo 'audit installation'"
+    "$SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 audit || echo 'audit installation'"
 
 apply_cis_control "4.1.2" "Ensure auditd service is enabled and running" \
     "$SUDO systemctl enable auditd && $SUDO systemctl start auditd || echo 'auditd service'"
@@ -381,7 +383,7 @@ echo ""
 echo "=== 5.1 Configure cron ==="
 
 apply_cis_control "5.1.1" "Ensure cron is installed" \
-    "$SUDO rm -rf /var/cache/dnf/* 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 cronie || echo 'cronie installation'"
+    "$SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 cronie || echo 'cronie installation'"
 
 apply_cis_control "5.1.2" "Ensure cron service is enabled" \
     "$SUDO systemctl enable crond || echo 'crond service'"
@@ -482,7 +484,7 @@ echo ""
 echo "=== 5.3 Configure PAM ==="
 
 apply_cis_control "5.3.1" "Ensure password creation requirements are configured" \
-    "$SUDO rm -rf /var/cache/dnf/* 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 libpwquality || echo 'libpwquality installation'"
+    "$SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; $SUDO dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 libpwquality || echo 'libpwquality installation'"
 
 apply_cis_control "5.3.2" "Ensure lockout for failed password attempts is configured" \
     "$SUDO bash -c 'echo \"auth required pam_faillock.so preauth audit silent deny=5 unlock_time=900\" >> /etc/pam.d/system-auth'"
