@@ -43,6 +43,12 @@ variable "iam_instance_profile" {
   default     = ""
 }
 
+variable "ssh_username" {
+  type        = string
+  description = "SSH username for the instance (required even when using SSM Session Manager)"
+  default     = "ec2-user"
+}
+
 # Variables - Image Configuration
 variable "instance_type" {
   type        = string
@@ -142,16 +148,22 @@ source "amazon-ebs" "amazonlinux2023" {
   vpc_id             = var.vpc_id != "" ? var.vpc_id : null
   subnet_id          = var.subnet_id != "" ? var.subnet_id : null
   security_group_ids = length(var.security_group_ids) > 0 ? var.security_group_ids : null
-  iam_instance_profile = var.iam_instance_profile != "" ? var.iam_instance_profile : null
+  
+  # IAM Instance Profile - Required for SSM Session Manager
+  # Must be set when using ssh_interface = "session_manager"
+  # Validation will fail if this is not provided
+  iam_instance_profile = var.iam_instance_profile
 
   # Use SSM Session Manager instead of SSH (required for private subnet)
   # Packer will use SSM Session Manager when ssh_interface is set to "session_manager"
   # This allows connection to instances in private subnets without direct internet access
   # SSM agent is pre-installed on Amazon Linux 2023
   # Instance must have IAM role with SSM permissions (AmazonSSMManagedInstanceCore policy)
+  ssh_username = var.ssh_username
   ssh_interface = "session_manager"
-  # Don't create temporary SSH keypair when using SSM Session Manager
-  temporary_key_pair_type = "none"
+  # When using SSM Session Manager, temporary_key_pair_type can be set to "rsa" or "ed25519"
+  # Packer will use SSM instead of creating/using the keypair
+  temporary_key_pair_type = "rsa"
   
   # Tags for the AMI
   tags = {

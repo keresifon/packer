@@ -96,7 +96,13 @@ jobs:
         run: packer init amazonlinux2023-golden-image.pkr.hcl
 
       - name: Validate Packer template
-        run: packer validate amazonlinux2023-golden-image.pkr.hcl
+        run: |
+          # Validation requires iam_instance_profile when using session_manager
+          # Pass a dummy value for validation (actual value comes from config during build)
+          packer validate \
+            -var="iam_instance_profile=validation-dummy" \
+            -var="ssh_username=ec2-user" \
+            amazonlinux2023-golden-image.pkr.hcl
 
   build:
     name: Build AMI
@@ -238,10 +244,18 @@ jobs:
             echo "✅ Using subnet: $SUBNET_ID"
           fi
           
+          # IAM instance profile is required when using SSM Session Manager
           if [ -n "$IAM_INSTANCE_PROFILE" ] && [ "$IAM_INSTANCE_PROFILE" != "" ]; then
             PACKER_CMD="$PACKER_CMD -var=\"iam_instance_profile=$IAM_INSTANCE_PROFILE\""
             echo "✅ Using IAM instance profile: $IAM_INSTANCE_PROFILE"
+          else
+            echo "❌ ERROR: iam_instance_profile is required when using SSM Session Manager"
+            echo "Please set it in config/build-config.yml (vpc.iam_instance_profile) or as a workflow input"
+            exit 1
           fi
+          
+          # ssh_username is required
+          PACKER_CMD="$PACKER_CMD -var=\"ssh_username=$SSH_USERNAME\""
           
           # Run packer build and capture exit code
           $PACKER_CMD amazonlinux2023-golden-image.pkr.hcl | tee packer-build.log
