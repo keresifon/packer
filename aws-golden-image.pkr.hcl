@@ -225,22 +225,23 @@ build {
       "AWS_REGION=${var.aws_region}"
     ]
     inline = [
+      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
       "if [ \"${var.enable_cis_hardening}\" != \"true\" ]; then",
       "  echo '⚠️  CIS hardening is disabled, skipping'",
       "  exit 0",
       "fi",
       "# Copy hardening script to permanent location",
-      "mkdir -p /opt/cis",
-      "cp scripts/cis/cis-level2-hardening.sh /opt/cis/cis-level2-hardening.sh",
-      "chmod +x /opt/cis/cis-level2-hardening.sh",
+      "$${SUDO} mkdir -p /opt/cis",
+      "$${SUDO} cp scripts/cis/cis-level2-hardening.sh /opt/cis/cis-level2-hardening.sh",
+      "$${SUDO} chmod +x /opt/cis/cis-level2-hardening.sh",
       "# Initialize status files",
       "rm -f /tmp/cis-hardening.complete /tmp/cis-hardening.failed",
       "echo 'starting' > /tmp/cis-hardening.status",
-      "# Launch hardening script in background with nohup",
-      "nohup bash /opt/cis/cis-level2-hardening.sh > /var/log/cis-hardening.log 2>&1 &",
-      "CIS_PID=$!",
-      "echo $CIS_PID > /tmp/cis-hardening.pid",
-      "echo '✅ CIS hardening started in background (PID: $CIS_PID)'",
+      "# Launch hardening script in background with nohup (as root via sudo)",
+      "# Use sh -c to properly capture the PID of the actual bash process, not sudo",
+      "$${SUDO} sh -c 'nohup bash /opt/cis/cis-level2-hardening.sh > /var/log/cis-hardening.log 2>&1 & echo $! > /tmp/cis-hardening.pid'",
+      "CIS_PID=$(cat /tmp/cis-hardening.pid)",
+      "echo '✅ CIS hardening started in background (PID: $${CIS_PID})'",
       "echo '📋 Logs available at: /var/log/cis-hardening.log'",
       "echo '⏳ Waiting for hardening to complete...'"
     ]
