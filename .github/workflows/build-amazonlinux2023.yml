@@ -68,7 +68,7 @@ jobs:
       - name: Setup Packer
         uses: hashicorp/setup-packer@main
         with:
-          version: "1.10.0"
+          version: ${{ vars.PACKER_VERSION || '1.10.0' }}
 
       - name: Configure AWS Credentials
         env:
@@ -186,7 +186,7 @@ jobs:
       - name: Setup Packer
         uses: hashicorp/setup-packer@main
         with:
-          version: "1.10.0"
+          version: ${{ vars.PACKER_VERSION || '1.10.0' }}
 
       - name: Configure AWS Credentials
         env:
