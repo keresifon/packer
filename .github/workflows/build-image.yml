@@ -447,20 +447,74 @@ jobs:
           echo "Packer exit code: $PACKER_EXIT"
           
           # Extract AMI ID from Packer's success output
-          # Packer outputs: "us-east-1: ami-xxxxxxxxxxxxxxxxx" or "AMIs were created:"
-          AMI_ID=$(grep -iE "(AMIs were created|us-east-1|us-west-|eu-|ap-).*ami-[0-9a-f]{17}" "$PACKER_OUTPUT_FILE" | grep -oE 'ami-[0-9a-f]{17}' | tail -1)
+          # Packer outputs specific patterns when AMI is created:
+          # - "AMIs were created:" followed by "us-east-1: ami-xxxxxxxxxxxxxxxxx"
+          # - "Creating AMI ... from instance" followed by "AMI: ami-xxxxx"
+          # - "us-east-1: ami-xxxxxxxxxxxxxxxxx" (in success section)
           
-          # Fallback: look for AMI ID in region: ami-xxx format
+          # Primary: Look for "AMIs were created" pattern (most reliable)
+          AMI_ID=$(grep -iE "AMIs were created" -A 5 "$PACKER_OUTPUT_FILE" | grep -oE '[a-z0-9-]+: ami-[0-9a-f]{17}' | grep -oE 'ami-[0-9a-f]{17}' | tail -1)
+          
+          # Secondary: Look for "Creating AMI" followed by "AMI: ami-xxx"
           if [ -z "$AMI_ID" ]; then
-            AMI_ID=$(grep -oE '[a-z0-9-]+: ami-[0-9a-f]{17}' "$PACKER_OUTPUT_FILE" | grep -oE 'ami-[0-9a-f]{17}' | tail -1)
+            AMI_ID=$(grep -iE "Creating AMI.*from instance" -A 10 "$PACKER_OUTPUT_FILE" | grep -iE "^.*AMI: ami-[0-9a-f]{17}" | grep -oE 'ami-[0-9a-f]{17}' | tail -1)
           fi
           
-          # Last resort: any AMI ID pattern
+          # Tertiary: Look for region: ami-xxx in success context (after "AMIs were created" or "Build finished")
           if [ -z "$AMI_ID" ]; then
-            AMI_ID=$(grep -oE 'ami-[0-9a-f]{17}' "$PACKER_OUTPUT_FILE" | tail -1)
+            AMI_ID=$(grep -iE "(Builds finished|artifacts of successful)" -A 10 "$PACKER_OUTPUT_FILE" | grep -oE '[a-z0-9-]+: ami-[0-9a-f]{17}' | grep -oE 'ami-[0-9a-f]{17}' | tail -1)
           fi
           
           echo "Extracted AMI ID: ${AMI_ID:-NOT FOUND}"
+          
+          # If we found an AMI ID, verify it's actually a newly created AMI (not the source AMI)
+          if [ -n "$AMI_ID" ]; then
+            echo "Verifying extracted AMI ID is a newly created AMI..."
+            # Check if AMI exists and was created recently (within last 2 hours)
+            AMI_INFO=$(aws ec2 describe-images --image-ids "$AMI_ID" --region "${{ env.PKR_VAR_aws_region }}" --query 'Images[0].[Name,CreationDate,ImageId]' --output text 2>/dev/null || echo "")
+            if [ -n "$AMI_INFO" ] && [ "$AMI_INFO" != "None" ]; then
+              AMI_NAME=$(echo "$AMI_INFO" | awk '{print $1}')
+              AMI_DATE=$(echo "$AMI_INFO" | awk '{print $2}')
+              echo "Found AMI: $AMI_ID"
+              echo "AMI Name: $AMI_NAME"
+              echo "AMI Creation Date: $AMI_DATE"
+              
+              # Check if AMI name matches our expected pattern (contains "golden-image")
+              # Source AMIs have names like "al2023-ami-2024.12.17-kernel-6.1-x86_64"
+              # Our AMIs have names like "amazonlinux2023-golden-image-2025-12-17-0205"
+              if [[ "$AMI_NAME" == *"golden-image"* ]]; then
+                echo "✅ Verified: AMI name '$AMI_NAME' matches expected pattern 'golden-image'"
+              elif [[ "$AMI_NAME" == *"al2023-ami"* ]]; then
+                # This is likely the source AMI (Amazon Linux base AMI), not our created AMI
+                echo "⚠️  WARNING: Extracted AMI name '$AMI_NAME' matches source AMI pattern 'al2023-ami'"
+                echo "This is likely the source AMI, not a newly created AMI. Clearing AMI_ID."
+                AMI_ID=""
+              else
+                # Unknown pattern - check creation time as fallback
+                # Use Python for reliable date parsing (available on most systems)
+                CURRENT_TIME=$(python3 -c "import time; print(int(time.time()))" 2>/dev/null || date +%s)
+                AMI_TIME=$(python3 -c "from datetime import datetime; print(int(datetime.strptime('$AMI_DATE', '%Y-%m-%dT%H:%M:%S.%fZ').timestamp()))" 2>/dev/null || echo "0")
+                if [ "$AMI_TIME" != "0" ]; then
+                  TIME_DIFF=$((CURRENT_TIME - AMI_TIME))
+                  MAX_AGE=7200  # 2 hours in seconds
+                  if [ $TIME_DIFF -gt $MAX_AGE ]; then
+                    echo "⚠️  WARNING: Extracted AMI was created $((TIME_DIFF / 3600)) hours ago (more than 2 hours)"
+                    echo "This is likely not a newly created AMI. Clearing AMI_ID."
+                    AMI_ID=""
+                  else
+                    echo "✅ Verified: AMI $AMI_ID was created recently ($((TIME_DIFF / 60)) minutes ago)"
+                  fi
+                else
+                  echo "⚠️  WARNING: Could not parse AMI creation date. Cannot verify if AMI is newly created."
+                  echo "Clearing AMI_ID to be safe."
+                  AMI_ID=""
+                fi
+              fi
+            else
+              echo "⚠️  WARNING: Extracted AMI ID $AMI_ID does not exist in AWS. Clearing AMI_ID."
+              AMI_ID=""
+            fi
+          fi
           
           # Check if Packer actually succeeded
           if [ $PACKER_EXIT -ne 0 ]; then
