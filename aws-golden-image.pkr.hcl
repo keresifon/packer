@@ -214,6 +214,13 @@ build {
     ]
   }
 
+  # Provisioning: Copy CIS Hardening Script
+  # Copy the hardening script to the instance first using file provisioner
+  provisioner "file" {
+    source      = "scripts/cis/cis-level2-hardening.sh"
+    destination = "/tmp/cis-level2-hardening.sh"
+  }
+
   # Provisioning: Apply CIS Level 2 Hardening (Background Process)
   # Launch hardening script in background to avoid Packer script deletion issues
   # The wrapper script exits immediately, so Packer doesn't have a long-running script to manage
@@ -232,7 +239,7 @@ build {
       "fi",
       "# Copy hardening script to permanent location",
       "$${SUDO} mkdir -p /opt/cis",
-      "$${SUDO} cp scripts/cis/cis-level2-hardening.sh /opt/cis/cis-level2-hardening.sh",
+      "$${SUDO} cp /tmp/cis-level2-hardening.sh /opt/cis/cis-level2-hardening.sh",
       "$${SUDO} chmod +x /opt/cis/cis-level2-hardening.sh",
       "# Initialize status files",
       "rm -f /tmp/cis-hardening.complete /tmp/cis-hardening.failed",
