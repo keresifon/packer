@@ -431,9 +431,397 @@ jobs:
             fi
           fi
 
+  validate-ami:
+    name: Validate AMI
+    needs: build
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result == 'success' && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != '' && needs.build.outputs.ami_id != 'null'
+    permissions:
+      contents: read
+    steps:
+      - name: Debug - Check why job is running or not
+        run: |
+          echo "=========================================="
+          echo "Validate-AMI Job Debug"
+          echo "=========================================="
+          echo "Build job result: ${{ needs.build.result }}"
+          echo "AMI ID value: '${{ needs.build.outputs.ami_id }}'"
+          echo "AMI ID is null: ${{ needs.build.outputs.ami_id == null }}"
+          echo "AMI ID is empty: ${{ needs.build.outputs.ami_id == '' }}"
+          echo "=========================================="
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Verify AWS credentials are set
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ ERROR: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set as GitHub secrets"
+            exit 1
+          fi
+          echo "✅ AWS credentials configured"
+          # Test AWS credentials
+          aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
+
+      - name: Install Ansible and SSM plugin
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install ansible
+          pip3 install boto3 botocore
+          # Install AWS collections for SSM connection plugin
+          ansible-galaxy collection install community.aws amazon.aws
+          ansible --version
+
+      - name: Verify AWS CLI is available
+        run: |
+          aws --version || (echo "AWS CLI not found, installing..." && \
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+            unzip -q awscliv2.zip && \
+            sudo ./aws/install --update && \
+            rm -rf aws awscliv2.zip)
+          aws --version
+
+      - name: Wait for AMI to be available
+        run: |
+          AMI_ID="${{ needs.build.outputs.ami_id }}"
+          echo "Waiting for AMI $AMI_ID to be available..."
+          aws ec2 wait image-available \
+            --image-ids "$AMI_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --max-attempts 30 \
+            --delay 10 || echo "AMI may still be initializing"
+
+      - name: Install yq for config parsing
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Read build configuration for validation
+        id: config-validation
+        run: |
+          CONFIG_FILE="config/build-config.yml"
+          VALIDATION_INSTANCE_TYPE=$(yq eval '.instance.validation_instance_type' "$CONFIG_FILE" || echo "t3.micro")
+          VALIDATION_CIS_LEVEL=$(yq eval '.cis.validation_level' "$CONFIG_FILE" || echo "2")
+          VALIDATION_CIS_THRESHOLD=$(yq eval '.cis.validation_threshold' "$CONFIG_FILE" || echo "80")
+          VALIDATION_FAIL_ON_FAILURE=$(yq eval '.cis.validation_fail_on_failure' "$CONFIG_FILE" || echo "false")
+          
+          # Get VPC configuration from environment or config
+          VPC_ID="${PKR_VAR_vpc_id:-$(yq eval '.vpc.vpc_id' "$CONFIG_FILE" || echo '')}"
+          SUBNET_ID="${PKR_VAR_subnet_id:-$(yq eval '.vpc.subnet_id' "$CONFIG_FILE" || echo '')}"
+          IAM_INSTANCE_PROFILE="${PKR_VAR_iam_instance_profile:-$(yq eval '.vpc.iam_instance_profile' "$CONFIG_FILE" || echo '')}"
+          SECURITY_GROUP_IDS="${SECURITY_GROUP_IDS:-$(yq eval '.vpc.security_group_ids[]' "$CONFIG_FILE" | tr '\n' ',' | sed 's/,$//' || echo '')}"
+          
+          echo "validation_instance_type=$VALIDATION_INSTANCE_TYPE" >> $GITHUB_OUTPUT
+          echo "validation_cis_level=$VALIDATION_CIS_LEVEL" >> $GITHUB_OUTPUT
+          echo "validation_cis_threshold=$VALIDATION_CIS_THRESHOLD" >> $GITHUB_OUTPUT
+          echo "validation_fail_on_failure=$VALIDATION_FAIL_ON_FAILURE" >> $GITHUB_OUTPUT
+          echo "validation_vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+          echo "validation_subnet_id=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "validation_iam_instance_profile=$IAM_INSTANCE_PROFILE" >> $GITHUB_OUTPUT
+          echo "validation_security_group_ids=$SECURITY_GROUP_IDS" >> $GITHUB_OUTPUT
+
+      - name: Create security group for validation instance
+        id: create-sg
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          VPC_ID="${{ steps.config-validation.outputs.validation_vpc_id }}"
+          
+          if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "" ]; then
+            echo "⚠️  WARNING: VPC ID not set. Creating security group in default VPC."
+            VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text --region ${{ env.PKR_VAR_aws_region }})
+          fi
+          
+          SG_NAME="packer-validation-$(date +%s)"
+          SG_ID=$(aws ec2 create-security-group \
+            --group-name "$SG_NAME" \
+            --description "Temporary security group for AMI validation (SSM Session Manager)" \
+            --vpc-id "$VPC_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'GroupId' \
+            --output text)
+          
+          # SSM Session Manager uses HTTPS (port 443) - no inbound rules needed
+          # But we need outbound HTTPS for SSM agent to communicate
+          echo "Security group created: $SG_ID (SSM Session Manager - no inbound rules needed)"
+          
+          echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
+
+      - name: Launch test instance
+        id: launch-instance
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          AMI_ID="${{ needs.build.outputs.ami_id }}"
+          SG_ID="${{ steps.create-sg.outputs.sg_id }}"
+          INSTANCE_NAME="ami-validation-$(date +%Y%m%d-%H%M%S)"
+          INSTANCE_TYPE="${{ steps.config-validation.outputs.validation_instance_type || 't3.micro' }}"
+          VPC_ID="${{ steps.config-validation.outputs.validation_vpc_id }}"
+          SUBNET_ID="${{ steps.config-validation.outputs.validation_subnet_id }}"
+          IAM_INSTANCE_PROFILE="${{ steps.config-validation.outputs.validation_iam_instance_profile }}"
+          SECURITY_GROUP_IDS="${{ steps.config-validation.outputs.validation_security_group_ids }}"
+          
+          # Build run-instances command
+          RUN_INSTANCES_CMD="aws ec2 run-instances \
+            --image-id \"$AMI_ID\" \
+            --instance-type \"$INSTANCE_TYPE\" \
+            --security-group-ids \"$SG_ID\""
+          
+          # Add VPC/subnet if provided
+          if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "" ]; then
+            RUN_INSTANCES_CMD="$RUN_INSTANCES_CMD --subnet-id \"$SUBNET_ID\""
+          fi
+          
+          # Add IAM instance profile (required for SSM)
+          if [ -n "$IAM_INSTANCE_PROFILE" ] && [ "$IAM_INSTANCE_PROFILE" != "" ]; then
+            RUN_INSTANCES_CMD="$RUN_INSTANCES_CMD --iam-instance-profile Name=\"$IAM_INSTANCE_PROFILE\""
+          else
+            echo "⚠️  WARNING: IAM instance profile not set. SSM Session Manager may not work."
+          fi
+          
+          # Add additional security groups if provided
+          if [ -n "$SECURITY_GROUP_IDS" ] && [ "$SECURITY_GROUP_IDS" != "" ]; then
+            # Convert comma-separated to space-separated
+            ADDITIONAL_SGS=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
+            RUN_INSTANCES_CMD="$RUN_INSTANCES_CMD --security-group-ids \"$SG_ID $ADDITIONAL_SGS\""
+          fi
+          
+          RUN_INSTANCES_CMD="$RUN_INSTANCES_CMD --tag-specifications \"ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Purpose,Value=AMI-Validation},{Key=Build,Value=${{ github.run_id }}}]\" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'Instances[0].InstanceId' \
+            --output text"
+          
+          INSTANCE_ID=$(eval $RUN_INSTANCES_CMD)
+          
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Test instance launched: $INSTANCE_ID"
+          
+          # Wait for instance to be running
+          aws ec2 wait instance-running \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }}
+
+      - name: Wait for SSM agent to be ready
+        id: wait-ssm
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          INSTANCE_ID="${{ steps.launch-instance.outputs.instance_id }}"
+          echo "Waiting for SSM agent to be ready on $INSTANCE_ID..."
+          
+          RETRY=0
+          MAX_RETRIES=30
+          while [ $RETRY -lt $MAX_RETRIES ]; do
+            if aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} \
+              --query 'InstanceInformationList[0].PingStatus' \
+              --output text 2>/dev/null | grep -q "Online"; then
+              echo "SSM agent is ready!"
+              exit 0
+            fi
+            RETRY=$((RETRY + 1))
+            echo "Waiting for SSM agent... ($RETRY/$MAX_RETRIES)"
+            sleep 10
+          done
+          
+          echo "ERROR: SSM agent not ready after $MAX_RETRIES attempts"
+          echo "Checking instance status..."
+          aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'Reservations[0].Instances[0].[State.Name,IamInstanceProfile.Arn]' \
+            --output text
+          exit 1
+
+      - name: Run AMI validation tests
+        id: validate
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          INSTANCE_ID="${{ steps.launch-instance.outputs.instance_id }}"
+          
+          # Use config values for validation
+          VALIDATION_CIS_LEVEL="${{ steps.config-validation.outputs.validation_cis_level || '2' }}"
+          VALIDATION_CIS_THRESHOLD="${{ steps.config-validation.outputs.validation_cis_threshold || '80' }}"
+          VALIDATION_FAIL_ON_FAILURE="${{ steps.config-validation.outputs.validation_fail_on_failure || 'false' }}"
+          
+          # Create Ansible inventory file for SSM
+          # Use aws_ssm connection plugin from community.aws collection
+          cat > /tmp/validation-inventory.ini << EOF
+          [validation]
+          $INSTANCE_ID ansible_connection=aws_ssm ansible_user=ec2-user
+          EOF
+          
+          # Create ansible.cfg to configure SSM connection
+          cat > ansible.cfg << EOF
+          [defaults]
+          host_key_checking = False
+          inventory = /tmp/validation-inventory.ini
+          [inventory]
+          enable_plugins = host_list, ini
+          [connection]
+          pipelining = True
+          EOF
+          
+          # Set environment variables for AWS credentials (required for SSM connection)
+          export AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+          export AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN"
+          export AWS_DEFAULT_REGION="${{ env.PKR_VAR_aws_region }}"
+          
+          # Run validation playbook using SSM
+          # The aws_ssm connection plugin uses AWS credentials from environment
+          ansible-playbook \
+            -i /tmp/validation-inventory.ini \
+            ansible/ami-validation-playbook.yml \
+            -e "cis_level=$VALIDATION_CIS_LEVEL" \
+            -e "cis_compliance_threshold=$VALIDATION_CIS_THRESHOLD" \
+            -e "fail_on_validation_failure=$VALIDATION_FAIL_ON_FAILURE" \
+            -v | tee validation-output.log
+          
+          VALIDATION_EXIT=$?
+          echo "validation_exit_code=$VALIDATION_EXIT" >> $GITHUB_OUTPUT
+
+      - name: Generate CIS Compliance Summary from Validation
+        if: always()
+        run: |
+          echo "## 🔒 CIS Compliance Report (Post-Build Validation)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract compliance information from validation output
+          if [ -f validation-output.log ] && grep -q "CIS Compliance Report" validation-output.log; then
+            # Extract compliance percentage
+            COMPLIANCE_PCT=$(grep -oP "Compliance: \K[0-9]+" validation-output.log | tail -1 || echo "N/A")
+            PASSED=$(grep -oP "Passed: \K[0-9]+" validation-output.log | tail -1 || echo "N/A")
+            TOTAL=$(grep -oP "Passed: [0-9]+/\K[0-9]+" validation-output.log | tail -1 || echo "N/A")
+            THRESHOLD=$(grep -oP "Threshold: \K[0-9]+" validation-output.log | tail -1 || echo "80")
+            
+            if [ "$COMPLIANCE_PCT" != "N/A" ]; then
+              # Determine status
+              if [ "$COMPLIANCE_PCT" -ge "$THRESHOLD" ]; then
+                STATUS_ICON="✅"
+                STATUS="PASS"
+              else
+                STATUS_ICON="❌"
+                STATUS="FAIL"
+              fi
+              
+              echo "### $STATUS_ICON Status: **$STATUS**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+              echo "| **Compliance** | **$COMPLIANCE_PCT%** |" >> $GITHUB_STEP_SUMMARY
+              echo "| Threshold | $THRESHOLD% |" >> $GITHUB_STEP_SUMMARY
+              echo "| Passed Checks | $PASSED / $TOTAL |" >> $GITHUB_STEP_SUMMARY
+              echo "| CIS Level | 2 |" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Extract failed checks if available
+              if grep -q "Failed checks:" validation-output.log; then
+                FAILED_CHECKS=$(grep -o '"Failed checks:[^"]*"' validation-output.log | sed 's/"Failed checks: *//;s/"$//' | head -1)
+                if [ -z "$FAILED_CHECKS" ]; then
+                  FAILED_CHECKS=$(grep "Failed checks:" validation-output.log | grep -v "^[[:space:]]*}" | sed -n 's/.*Failed checks:[[:space:]]*\([^}]*\).*/\1/p' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -1)
+                fi
+                FAILED_CHECKS=$(echo "$FAILED_CHECKS" | sed 's/[{}"]//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                if [ -n "$FAILED_CHECKS" ] && echo "$FAILED_CHECKS" | grep -q '[A-Za-z0-9]'; then
+                  echo "### ❌ Failed Checks" >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                  echo "$FAILED_CHECKS" | sed 's/, */\n/g' | sed 's/^[[:space:]]*//' | sed '/^$/d' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                fi
+              fi
+              
+              echo "---" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "> 📋 This is the post-build validation compliance check. For build-time compliance, check the build job summary." >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ Could not extract compliance information from validation logs." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "⚠️ CIS compliance check not found in validation logs." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: |
+            validation-output.log
+            /tmp/validation-inventory.ini
+          retention-days: 30
+
+      - name: Cleanup - Terminate test instance
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          INSTANCE_ID="${{ steps.launch-instance.outputs.instance_id }}"
+          SG_ID="${{ steps.create-sg.outputs.sg_id }}"
+          
+          if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "" ]; then
+            echo "Terminating test instance: $INSTANCE_ID"
+            aws ec2 terminate-instances \
+              --instance-ids "$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} || true
+            
+            # Wait for instance to terminate
+            aws ec2 wait instance-terminated \
+              --instance-ids "$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} || true
+          fi
+          
+          if [ -n "$SG_ID" ] && [ "$SG_ID" != "" ]; then
+            echo "Deleting security group: $SG_ID"
+            # Wait a bit for instance termination to complete
+            sleep 5
+            aws ec2 delete-security-group \
+              --group-id "$SG_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} || true
+          fi
+
+      - name: Validation Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "AMI Validation Summary"
+          echo "=========================================="
+          echo "AMI ID: ${{ needs.build.outputs.ami_id }}"
+          echo "Validation Exit Code: ${{ steps.validate.outputs.validation_exit_code }}"
+          if [ "${{ steps.validate.outputs.validation_exit_code }}" = "0" ]; then
+            echo "Status: ✅ VALIDATION PASSED"
+          else
+            echo "Status: ❌ VALIDATION FAILED"
+          fi
+          echo "=========================================="
+
   copy-ami:
     name: Copy AMI to Target Regions
-    needs: build
+    needs: [build, validate-ami]
     runs-on: ubuntu-latest
     if: success() && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != '' && needs.build.outputs.ami_id != 'null'
     permissions:

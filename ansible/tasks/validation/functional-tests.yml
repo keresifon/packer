@@ -1,9 +1,9 @@
 ---
 # Functional validation tests for AMI
 
-- name: Test 1 - Verify SSH connectivity
+- name: Test 1 - Verify SSM/Session Manager connectivity
   debug:
-    msg: "SSH connectivity: PASS"
+    msg: "SSM Session Manager connectivity: PASS"
 
 - name: Test 2 - Verify system is booted and running
   command: uptime
@@ -21,7 +21,7 @@
   failed_when: false
   changed_when: false
   loop:
-    - ssh
+    - sshd
     - rsyslog
     - chronyd
 
