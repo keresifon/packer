@@ -30,19 +30,37 @@
     group: root
     mode: '0600'
 
-- name: Set /etc/shadow permissions
+- name: Set /etc/shadow permissions (Ubuntu/Debian)
   file:
     path: /etc/shadow
     owner: root
     group: shadow
     mode: '0000'
+  when: ansible_os_family == "Debian"
 
-- name: Set /etc/shadow- permissions
+- name: Set /etc/shadow permissions (Amazon Linux/RHEL)
+  file:
+    path: /etc/shadow
+    owner: root
+    group: root
+    mode: '0000'
+  when: ansible_os_family == "RedHat"
+
+- name: Set /etc/shadow- permissions (Ubuntu/Debian)
   file:
     path: /etc/shadow-
     owner: root
     group: shadow
     mode: '0000'
+  when: ansible_os_family == "Debian"
+
+- name: Set /etc/shadow- permissions (Amazon Linux/RHEL)
+  file:
+    path: /etc/shadow-
+    owner: root
+    group: root
+    mode: '0000'
+  when: ansible_os_family == "RedHat"
 
 - name: Set /etc/ssh/sshd_config permissions
   file:
