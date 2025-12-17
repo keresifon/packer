@@ -214,14 +214,89 @@ build {
     ]
   }
 
-  # Provisioning: Apply CIS Level 2 Hardening
-  # Note: CIS tools (OpenSCAP, SCAP content) are downloaded in the separate assessment job, not during build
-  # The script self-deletes at the end to prevent Packer cleanup errors
+  # Provisioning: Apply CIS Level 2 Hardening (Background Process)
+  # Launch hardening script in background to avoid Packer script deletion issues
+  # The wrapper script exits immediately, so Packer doesn't have a long-running script to manage
   provisioner "shell" {
     environment_vars = [
-      "ENABLE_CIS_HARDENING=${var.enable_cis_hardening}"
+      "ENABLE_CIS_HARDENING=${var.enable_cis_hardening}",
+      "CIS_S3_BUCKET=${var.cis_s3_bucket}",
+      "CIS_S3_PREFIX=${var.cis_s3_prefix}",
+      "AWS_REGION=${var.aws_region}"
     ]
-    script = "scripts/cis/cis-level2-hardening.sh"
+    inline = [
+      "if [ \"${var.enable_cis_hardening}\" != \"true\" ]; then",
+      "  echo '⚠️  CIS hardening is disabled, skipping'",
+      "  exit 0",
+      "fi",
+      "# Copy hardening script to permanent location",
+      "mkdir -p /opt/cis",
+      "cp scripts/cis/cis-level2-hardening.sh /opt/cis/cis-level2-hardening.sh",
+      "chmod +x /opt/cis/cis-level2-hardening.sh",
+      "# Initialize status files",
+      "rm -f /tmp/cis-hardening.complete /tmp/cis-hardening.failed",
+      "echo 'starting' > /tmp/cis-hardening.status",
+      "# Launch hardening script in background with nohup",
+      "nohup bash /opt/cis/cis-level2-hardening.sh > /var/log/cis-hardening.log 2>&1 &",
+      "CIS_PID=$!",
+      "echo $CIS_PID > /tmp/cis-hardening.pid",
+      "echo '✅ CIS hardening started in background (PID: $CIS_PID)'",
+      "echo '📋 Logs available at: /var/log/cis-hardening.log'",
+      "echo '⏳ Waiting for hardening to complete...'"
+    ]
+  }
+
+  # Provisioning: Wait for CIS Hardening to Complete
+  # Poll status file until hardening completes (max 30 minutes)
+  provisioner "shell" {
+    inline = [
+      "if [ \"${var.enable_cis_hardening}\" != \"true\" ]; then",
+      "  exit 0",
+      "fi",
+      "MAX_WAIT=1800  # 30 minutes in seconds",
+      "WAIT_INTERVAL=10  # Check every 10 seconds",
+      "ELAPSED=0",
+      "while [ $ELAPSED -lt $MAX_WAIT ]; do",
+      "  if [ -f /tmp/cis-hardening.complete ]; then",
+      "    echo '✅ CIS hardening completed successfully'",
+      "    echo '📋 Last 50 lines of hardening log:'",
+      "    tail -50 /var/log/cis-hardening.log || true",
+      "    exit 0",
+      "  fi",
+      "  if [ -f /tmp/cis-hardening.failed ]; then",
+      "    echo '❌ CIS hardening failed'",
+      "    echo '📋 Last 100 lines of hardening log:'",
+      "    tail -100 /var/log/cis-hardening.log || true",
+      "    exit 1",
+      "  fi",
+      "  # Check if process is still running",
+      "  if [ -f /tmp/cis-hardening.pid ]; then",
+      "    PID=$(cat /tmp/cis-hardening.pid)",
+      "    if ! ps -p $PID > /dev/null 2>&1; then",
+      "      # Process died but no status file - check exit code",
+      "      wait $PID 2>/dev/null || EXIT_CODE=$?",
+      "      if [ ${EXIT_CODE:-0} -ne 0 ]; then",
+      "        echo '❌ CIS hardening process exited with error (code: ${EXIT_CODE})'",
+      "        tail -100 /var/log/cis-hardening.log || true",
+      "        exit 1",
+      "      fi",
+      "    fi",
+      "  fi",
+      "  sleep $WAIT_INTERVAL",
+      "  ELAPSED=$((ELAPSED + WAIT_INTERVAL))",
+      "  if [ $((ELAPSED % 60)) -eq 0 ]; then",
+      "    echo \"⏳ Still waiting... ($((ELAPSED / 60)) minutes elapsed)\"",
+      "  fi",
+      "done",
+      "echo '❌ ERROR: CIS hardening timed out after $MAX_WAIT seconds'",
+      "if [ -f /tmp/cis-hardening.pid ]; then",
+      "  PID=$(cat /tmp/cis-hardening.pid)",
+      "  echo 'Process PID: $PID'",
+      "  ps aux | grep $PID || true",
+      "fi",
+      "tail -100 /var/log/cis-hardening.log || true",
+      "exit 1"
+    ]
   }
 
   # Note: CIS Assessment is now run as a separate validation job after AMI creation

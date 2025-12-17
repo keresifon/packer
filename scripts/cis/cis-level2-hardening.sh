@@ -12,16 +12,14 @@ cleanup() {
     # Flush output buffers (use full path to sync)
     /usr/bin/sync 2>/dev/null || /bin/sync 2>/dev/null || true
     
-    # Self-delete script file if it's a Packer temporary script
-    # This prevents Packer's "Error removing temporary script" error
-    # Use a background process to delete after script fully exits
-    SCRIPT_PATH="${BASH_SOURCE[0]:-}"
-    if [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
-        if [[ "$SCRIPT_PATH" == /tmp/script_*.sh ]] || [[ "$SCRIPT_PATH" == /tmp/packer-shell* ]]; then
-            # Delete in background to avoid blocking exit
-            (sleep 0.2; rm -f "$SCRIPT_PATH" 2>/dev/null) &
-            # Also try immediate deletion (may fail if file is still open, but background will catch it)
-            rm -f "$SCRIPT_PATH" 2>/dev/null || true
+    # Write status file for background process monitoring
+    if [ -f /tmp/cis-hardening.pid ]; then
+        if [ $exit_code -eq 0 ]; then
+            echo "completed" > /tmp/cis-hardening.status
+            touch /tmp/cis-hardening.complete
+        else
+            echo "failed (exit code: $exit_code)" > /tmp/cis-hardening.status
+            touch /tmp/cis-hardening.failed
         fi
     fi
     
@@ -654,6 +652,13 @@ echo "It is recommended to run CIS assessment tools to verify compliance."
 # Use full path to sync (coreutils) and make non-fatal
 /usr/bin/sync 2>/dev/null || /bin/sync 2>/dev/null || true
 
-# Exit cleanly - trap cleanup function will handle script self-deletion
+# Write completion status file (for background process monitoring)
+if [ -f /tmp/cis-hardening.pid ]; then
+    echo "completed" > /tmp/cis-hardening.status
+    touch /tmp/cis-hardening.complete
+    echo "✅ CIS hardening status file created"
+fi
+
+# Exit cleanly - no need for self-deletion when running as background process
 exit 0
 
