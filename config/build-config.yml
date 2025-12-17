@@ -6,8 +6,7 @@
 # Default Build Configuration
 build:
   default_region: "us-east-1"
-  default_ubuntu_version: "22.04"
-  build_name: "ubuntu-golden-image"
+  build_name: "amazonlinux2023-golden-image"
 
 # Instance Configuration
 instance:
@@ -15,13 +14,29 @@ instance:
   build_instance_type: "t3.micro"
   # Instance type for validation testing
   validation_instance_type: "t3.micro"
-  # SSH username for Ubuntu instances
-  ssh_username: "ubuntu"
+  # SSH username for Amazon Linux 2023 instances (not used with SSM, but kept for compatibility)
+  ssh_username: "ec2-user"
+
+# VPC Configuration (Required for private subnet builds)
+vpc:
+  # VPC ID where build instances will be launched
+  # Leave empty to use default VPC (not recommended for production)
+  vpc_id: "vpc-027970a88dd594869"
+  # Private subnet ID where build instances will be launched
+  # Must have route to NAT Gateway or VPC endpoints for internet access
+  subnet_id: "subnet-0a5f62548c271cf0f"
+  # Security group IDs for build instances
+  # Must allow SSM Session Manager traffic (port 443)
+  # Security groups are automatically configured by AWS for SSM
+  security_group_ids: ["sg-015ad465f0003045a"]
+  # IAM instance profile name for SSM Session Manager access
+  # Instance profile must have AmazonSSMManagedInstanceCore policy
+  iam_instance_profile: "packer-ssm-instance-profile"
 
 # Block Device Configuration
 block_device:
-  device_name: "/dev/sda1"
-  volume_size: 20  # GB
+  device_name: "/dev/xvda"
+  volume_size: 30  # GB
   volume_type: "gp3"
   encrypted: true
   delete_on_termination: true
@@ -43,18 +58,18 @@ cis:
 
 # Parameter Store Configuration
 parameter_store:
-  base_path: "/packer/ubuntu-golden-image"
+  base_path: "/packer/amazonlinux2023-golden-image"
   # Enable storing AMI IDs in Parameter Store
   enabled: true
 
 # AWS Resource Tags
 tags:
   # OS tag value
-  os: "Ubuntu"
+  os: "AmazonLinux2023"
   # ManagedBy tag value
   managed_by: "Packer"
   # Environment tag value
-  environment: "Production"
+  environment: "development"
 
 # AMI Distribution Configuration
 # Target regions where AMIs will be copied after successful build
@@ -62,5 +77,3 @@ distribution:
   # Simple list format - all listed regions will be copied
   target_regions:
     - us-east-2      # US East (Ohio)
-  
-  
