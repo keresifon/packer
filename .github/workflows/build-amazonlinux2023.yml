@@ -38,9 +38,11 @@ env:
   TARGET_REGIONS: ${{ github.event.inputs.target_regions || '' }}
   STORE_IN_PARAMETER_STORE: ${{ github.event.inputs.store_in_parameter_store || 'true' }}
   # VPC Configuration from GitHub Variables/Secrets
+  # Note: security_group_ids is a list type and cannot be set via PKR_VAR_ env var
+  # It must be passed via -var flag in the packer build command
   PKR_VAR_vpc_id: ${{ vars.VPC_ID || secrets.VPC_ID || '' }}
   PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || secrets.SUBNET_ID || '' }}
-  PKR_VAR_security_group_ids: ${{ vars.SECURITY_GROUP_IDS || secrets.SECURITY_GROUP_IDS || '' }}
+  SECURITY_GROUP_IDS: ${{ vars.SECURITY_GROUP_IDS || secrets.SECURITY_GROUP_IDS || '' }}
   PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || secrets.IAM_INSTANCE_PROFILE || '' }}
   # AWS Credentials from GitHub Secrets
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -84,12 +86,6 @@ jobs:
           # Test AWS credentials
           aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
-      - name: Install Ansible
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install ansible
-
       - name: Initialize Packer
         env:
           PACKER_GITHUB_API_TOKEN: ${{ github.token }}
@@ -104,10 +100,26 @@ jobs:
           # Validation requires iam_instance_profile when using session_manager
           # Use actual value from GitHub variables/secrets or dummy for validation
           IAM_PROFILE="${PKR_VAR_iam_instance_profile:-validation-dummy}"
-          packer validate \
-            -var="iam_instance_profile=$IAM_PROFILE" \
-            -var="ssh_username=ec2-user" \
-            amazonlinux2023-golden-image.pkr.hcl
+          VPC_ID="${PKR_VAR_vpc_id:-}"
+          SUBNET_ID="${PKR_VAR_subnet_id:-}"
+          
+          # Build validation command
+          VALIDATE_CMD="packer validate"
+          VALIDATE_CMD="$VALIDATE_CMD -var=\"iam_instance_profile=$IAM_PROFILE\""
+          VALIDATE_CMD="$VALIDATE_CMD -var=\"ssh_username=ec2-user\""
+          
+          # Add VPC config if provided (optional for validation)
+          if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "" ]; then
+            VALIDATE_CMD="$VALIDATE_CMD -var=\"vpc_id=$VPC_ID\""
+          fi
+          if [ -n "$SUBNET_ID" ] && [ "$SUBNET_ID" != "" ]; then
+            VALIDATE_CMD="$VALIDATE_CMD -var=\"subnet_id=$SUBNET_ID\""
+          fi
+          
+          # Note: security_group_ids is skipped during validation as it's a list type
+          # and not required for template validation
+          
+          $VALIDATE_CMD amazonlinux2023-golden-image.pkr.hcl
 
   build:
     name: Build AMI
@@ -225,7 +237,9 @@ jobs:
           # VPC Configuration from GitHub Variables/Secrets (priority: env vars > config file)
           VPC_ID="${{ env.PKR_VAR_vpc_id }}"
           SUBNET_ID="${{ env.PKR_VAR_subnet_id }}"
-          SECURITY_GROUP_IDS="${{ env.PKR_VAR_security_group_ids }}"
+          # Note: security_group_ids is a list type and cannot use PKR_VAR_ env var
+          # It must be passed via -var flag, so we use SECURITY_GROUP_IDS (without PKR_VAR_ prefix)
+          SECURITY_GROUP_IDS="${{ env.SECURITY_GROUP_IDS }}"
           IAM_INSTANCE_PROFILE="${{ env.PKR_VAR_iam_instance_profile }}"
           
           # Fallback to config file if GitHub variables not set
