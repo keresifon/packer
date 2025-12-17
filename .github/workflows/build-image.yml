@@ -217,12 +217,15 @@ jobs:
               echo "⚠️  Packer ${INSTALLED_VERSION} installed, but ${PACKER_VERSION} required. Reinstalling..."
             fi
           fi
+          # Remove old packer binary if it exists
+          rm -f ~/bin/packer
+          
           if [ -f "bin/packer_${PACKER_VERSION}_linux_amd64.zip" ]; then
-            unzip -q "bin/packer_${PACKER_VERSION}_linux_amd64.zip" -d ~/bin/
+            unzip -o -q "bin/packer_${PACKER_VERSION}_linux_amd64.zip" -d ~/bin/
           else
             echo "Downloading Packer ${PACKER_VERSION}..."
             curl -fsSL "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip" -o /tmp/packer.zip
-            unzip -q /tmp/packer.zip -d ~/bin/
+            unzip -o -q /tmp/packer.zip -d ~/bin/
             rm /tmp/packer.zip
           fi
           chmod +x ~/bin/packer
@@ -373,14 +376,19 @@ jobs:
               echo "⚠️  Packer ${INSTALLED_VERSION} installed, but ${PACKER_VERSION} required. Reinstalling..."
             fi
           fi
+          # Remove old packer binary if it exists
+          rm -f ~/bin/packer
+          
           if [ -f "bin/packer_${PACKER_VERSION}_linux_amd64.zip" ]; then
-            unzip -q "bin/packer_${PACKER_VERSION}_linux_amd64.zip" -d ~/bin/
+            unzip -o -q "bin/packer_${PACKER_VERSION}_linux_amd64.zip" -d ~/bin/
           else
             echo "Downloading Packer ${PACKER_VERSION}..."
             curl -fsSL "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip" -o /tmp/packer.zip
-            unzip -q /tmp/packer.zip -d ~/bin/; rm /tmp/packer.zip
+            unzip -o -q /tmp/packer.zip -d ~/bin/
+            rm /tmp/packer.zip
           fi
-          chmod +x ~/bin/packer; packer version
+          chmod +x ~/bin/packer
+          packer version
 
       - name: Configure AWS Credentials
         run: |
