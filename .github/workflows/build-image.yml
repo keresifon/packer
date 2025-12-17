@@ -183,7 +183,7 @@ jobs:
             echo "❌ cpio binary not found in extracted files"
             echo "Contents of extract directory:"
             find "$EXTRACT_DIR" -type f | head -30
-            exit 1
+              exit 1
           fi
           
           echo "Found cpio binary: $CPIO_BINARY"
@@ -194,7 +194,7 @@ jobs:
             echo "✅ cpio installed successfully to ~/bin"
           else
             echo "❌ cpio installation failed"
-            exit 1
+              exit 1
           fi
           
           rm -rf "$EXTRACT_DIR"
@@ -347,7 +347,7 @@ jobs:
             echo "Extract directory contents:"
             find "$EXTRACT_DIR" -type f | head -20
             rm -rf "$EXTRACT_DIR"
-            exit 1
+              exit 1
           fi
           
           echo "Found cpio: $CPIO_BINARY"
@@ -358,7 +358,7 @@ jobs:
             echo "✅ cpio installed successfully"
           else
             echo "❌ cpio installation verification failed"
-            exit 1
+              exit 1
           fi
           
           rm -rf "$EXTRACT_DIR"
@@ -370,7 +370,7 @@ jobs:
             INSTALLED_VERSION=$(packer version | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
             if [ "$INSTALLED_VERSION" = "$PACKER_VERSION" ]; then
               echo "✅ Packer ${PACKER_VERSION} already installed"
-              packer version
+          packer version
               exit 0
             else
               echo "⚠️  Packer ${INSTALLED_VERSION} installed, but ${PACKER_VERSION} required. Reinstalling..."
@@ -441,7 +441,7 @@ jobs:
           eval $PACKER_BUILD_CMD 2>&1 | tee "$PACKER_OUTPUT_FILE"
           PACKER_EXIT=${PIPESTATUS[0]}
           set -e  # Re-enable exit on error
-          
+
           echo ""
           echo "=== Packer Build Summary ==="
           echo "Packer exit code: $PACKER_EXIT"
@@ -465,13 +465,13 @@ jobs:
           # Check if Packer actually succeeded
           if [ $PACKER_EXIT -ne 0 ]; then
             echo "❌ Packer build failed with exit code: $PACKER_EXIT"
-            echo ""
+          echo ""
             echo "Last 100 lines of Packer output:"
             tail -100 "$PACKER_OUTPUT_FILE"
             
             # Even if Packer failed, check if AMI was created (sometimes Packer fails after AMI creation)
             if [ -n "$AMI_ID" ]; then
-              echo ""
+          echo ""
               echo "Checking if AMI was created despite Packer error..."
               if aws ec2 describe-images --image-ids "$AMI_ID" --region "${{ env.PKR_VAR_aws_region }}" >/dev/null 2>&1; then
                 echo "✅ AMI $AMI_ID exists despite Packer error - build partially succeeded"
@@ -481,7 +481,7 @@ jobs:
               else
                 echo "❌ AMI $AMI_ID does not exist - build failed"
                 rm -f "$PACKER_OUTPUT_FILE"
-                exit 1
+            exit 1
               fi
             else
               echo "❌ No AMI ID found in output - build failed"
@@ -515,7 +515,7 @@ jobs:
           
           rm -f "$PACKER_OUTPUT_FILE"
           exit 0
-      
+
       - name: Output AMI ID
         if: success()
         run: |
@@ -623,8 +623,8 @@ jobs:
           
           if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
             echo "❌ ERROR: Failed to launch EC2 instance"
-            exit 1
-          fi
+              exit 1
+            fi
           
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "✅ Launched instance: $INSTANCE_ID"
@@ -643,7 +643,7 @@ jobs:
             echo "Waiting for SSM agent... ($i/30)"
             sleep 10
           done
-
+          
       - name: Download CIS Assessment Scripts
         run: |
           mkdir -p scripts/cis
@@ -767,8 +767,8 @@ jobs:
             --instance-id "$INSTANCE_ID" \
             --region "${{ env.PKR_VAR_aws_region }}" \
             --query 'ResponseCode' \
-            --output text)
-          
+              --output text)
+            
           if [ "$EXIT_CODE" != "0" ]; then
             echo "⚠️  CIS Assessment completed with exit code: $EXIT_CODE"
             echo "This may indicate compliance issues. Review the assessment output above."

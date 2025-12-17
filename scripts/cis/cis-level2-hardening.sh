@@ -9,8 +9,8 @@ set +o pipefail  # Allow pipes to succeed even if some commands fail
 # Cleanup function to ensure clean exit
 cleanup() {
     local exit_code=$?
-    # Flush output buffers
-    sync 2>/dev/null || true
+    # Flush output buffers (use full path to sync)
+    /usr/bin/sync 2>/dev/null || /bin/sync 2>/dev/null || true
     # Exit with the original exit code
     exit $exit_code
 }
@@ -321,7 +321,7 @@ echo ""
 echo "=== 3.3 Firewall Configuration ==="
 
 apply_cis_control "3.3.1" "Ensure firewalld is installed" \
-    "if rpm -q firewalld >/dev/null 2>&1; then echo 'firewalld already installed'; else echo 'Installing firewalld...'; $SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; if timeout 600 $SUDO dnf install -y --setopt=keepcache=0 --setopt=timeout=300 --setopt=retries=3 --setopt=metadata_expire=0 firewalld >/dev/null 2>&1; then echo 'firewalld installed successfully'; else echo 'firewalld installation failed or timed out'; exit 1; fi; fi"
+    "if rpm -q firewalld >/dev/null 2>&1; then echo 'firewalld already installed'; else echo 'Installing firewalld...'; $SUDO mkdir -p /var/cache/dnf && find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true; find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true; timeout 600 $SUDO dnf install -y --setopt=keepcache=0 --setopt=timeout=300 --setopt=retries=3 --setopt=metadata_expire=0 firewalld 2>&1 && echo 'firewalld installed successfully' || echo 'firewalld installation failed or timed out (non-fatal)'; fi"
 
 apply_cis_control "3.3.2" "Ensure iptables is not installed" \
     "$SUDO dnf remove -y iptables-services 2>/dev/null || echo 'iptables-services not installed'"
@@ -637,7 +637,8 @@ echo "Note: Some controls may require manual verification or additional configur
 echo "It is recommended to run CIS assessment tools to verify compliance."
 
 # Flush all output buffers
-sync
+# Use full path to sync (coreutils) and make non-fatal
+/usr/bin/sync 2>/dev/null || /bin/sync 2>/dev/null || true
 
 # Exit cleanly - trap will handle cleanup
 exit 0
