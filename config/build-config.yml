@@ -17,21 +17,21 @@ instance:
   # SSH username for Amazon Linux 2023 instances (not used with SSM, but kept for compatibility)
   ssh_username: "ec2-user"
 
-# VPC Configuration (Required for private subnet builds)
-vpc:
-  # VPC ID where build instances will be launched
-  # Leave empty to use default VPC (not recommended for production)
-  vpc_id: "vpc-027970a88dd594869"
-  # Private subnet ID where build instances will be launched
-  # Must have route to NAT Gateway or VPC endpoints for internet access
-  subnet_id: "subnet-0a5f62548c271cf0f"
-  # Security group IDs for build instances
-  # Must allow SSM Session Manager traffic (port 443)
-  # Security groups are automatically configured by AWS for SSM
-  security_group_ids: ["sg-015ad465f0003045a"]
-  # IAM instance profile name for SSM Session Manager access
-  # Instance profile must have AmazonSSMManagedInstanceCore policy
-  iam_instance_profile: "packer-ssm-instance-profile"
+# # VPC Configuration (Required for private subnet builds)
+# vpc:
+#   # VPC ID where build instances will be launched
+#   # Leave empty to use default VPC (not recommended for production)
+#   vpc_id: "vpc-027970a88dd594869"
+#   # Private subnet ID where build instances will be launched
+#   # Must have route to NAT Gateway or VPC endpoints for internet access
+#   subnet_id: "subnet-0a5f62548c271cf0f"
+#   # Security group IDs for build instances
+#   # Must allow SSM Session Manager traffic (port 443)
+#   # Security groups are automatically configured by AWS for SSM
+#   security_group_ids: ["sg-015ad465f0003045a"]
+#   # IAM instance profile name for SSM Session Manager access
+#   # Instance profile must have AmazonSSMManagedInstanceCore policy
+#   iam_instance_profile: "packer-ssm-instance-profile"
 
 # Block Device Configuration
 block_device:

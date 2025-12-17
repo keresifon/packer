@@ -224,9 +224,13 @@ build {
   # Provisioning: Install common packages
   provisioner "shell" {
     inline = [
-      "sudo dnf install -y curl wget jq htop net-tools",
+      "# curl-minimal is pre-installed, replace it with full curl package",
+      "# Use --allowerasing to allow replacing curl-minimal with curl",
+      "sudo dnf install -y --allowerasing curl wget jq htop net-tools || sudo dnf install -y wget jq htop net-tools",
+      "# Verify curl is available (either curl or curl-minimal)",
+      "curl --version || echo 'Warning: curl not available, curl-minimal may be in use'",
       "# Install AWS CLI v2 using official installer",
-      "curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"/tmp/awscliv2.zip\"",
+      "curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"/tmp/awscliv2.zip\" || (echo 'curl failed, trying wget' && wget -q \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -O \"/tmp/awscliv2.zip\")",
       "unzip -q /tmp/awscliv2.zip -d /tmp",
       "sudo /tmp/aws/install",
       "rm -rf /tmp/aws /tmp/awscliv2.zip"
