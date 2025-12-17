@@ -43,13 +43,25 @@
     line: 'UMASK 027'
   when: (cis_level | default(cis_level_default) | int) >= 2
 
-- name: Ensure default user shell timeout is configured (Level 2)
+- name: Ensure default user shell timeout is configured (Level 2) (Ubuntu/Debian)
   lineinfile:
     path: /etc/bash.bashrc
     regexp: '^TMOUT='
     line: 'TMOUT=600'
     insertafter: '^# If not running interactively'
-  when: (cis_level | default(cis_level_default) | int) >= 2
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "Debian"
+
+- name: Ensure default user shell timeout is configured (Level 2) (Amazon Linux/RHEL)
+  lineinfile:
+    path: /etc/bashrc
+    regexp: '^TMOUT='
+    line: 'TMOUT=600'
+    insertafter: '^# System wide functions and aliases'
+  when:
+    - (cis_level | default(cis_level_default) | int) >= 2
+    - ansible_os_family == "RedHat"
 
 - name: Ensure default user shell timeout is configured in profile (Level 2)
   lineinfile:
