@@ -239,13 +239,20 @@ build {
   }
   
   # Provisioning: Clean up
+  # Note: Exclude Packer's temporary scripts (script_*.sh, packer-shell*) from cleanup
+  # Packer needs to delete these itself, or it will fail with "Error removing temporary script"
+  # We clean specific directories/files instead of using wildcards that might catch Packer's scripts
   provisioner "shell" {
     inline = [
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
       "$${SUDO} cloud-init clean",
       "$${SUDO} rm -f /var/log/cloud-init*.log",
-      "$${SUDO} rm -rf /tmp/*",
-      "$${SUDO} rm -rf /var/tmp/*",
+      "# Clean /tmp but exclude Packer's temporary scripts (script_*.sh, packer-shell*)",
+      "# Use find to exclude Packer script patterns",
+      "$${SUDO} find /tmp -mindepth 1 -maxdepth 1 -type f ! -name 'script_*.sh' ! -name 'packer-shell*' -delete 2>/dev/null || true",
+      "$${SUDO} find /tmp -mindepth 1 -maxdepth 1 -type d ! -name 'script_*' ! -name 'packer-shell*' -exec rm -rf {} + 2>/dev/null || true",
+      "# Clean /var/tmp (Packer doesn't use this directory)",
+      "$${SUDO} rm -rf /var/tmp/* 2>/dev/null || true",
       "$${SUDO} dnf clean all",
       "$${SUDO} sync"
     ]
