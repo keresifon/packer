@@ -245,10 +245,11 @@ build {
       "rm -f /tmp/cis-hardening.complete /tmp/cis-hardening.failed",
       "echo 'starting' > /tmp/cis-hardening.status",
       "# Launch hardening script in background with nohup (as root via sudo)",
-      "# Use sh -c to properly capture the PID of the actual bash process, not sudo",
-      "$${SUDO} sh -c 'nohup bash /opt/cis/cis-level2-hardening.sh > /var/log/cis-hardening.log 2>&1 & echo $! > /tmp/cis-hardening.pid'",
+      "# Export environment variables and use sh -c to properly capture the PID",
+      "# Note: Environment variables from provisioner are not automatically passed to sudo, so we export them explicitly",
+      "$${SUDO} sh -c \"export ENABLE_CIS_HARDENING='${var.enable_cis_hardening}' && export CIS_S3_BUCKET='${var.cis_s3_bucket}' && export CIS_S3_PREFIX='${var.cis_s3_prefix}' && export AWS_REGION='${var.aws_region}' && nohup bash /opt/cis/cis-level2-hardening.sh > /var/log/cis-hardening.log 2>&1 & echo \\$! > /tmp/cis-hardening.pid\"",
       "CIS_PID=$(cat /tmp/cis-hardening.pid)",
-      "echo '✅ CIS hardening started in background (PID: $${CIS_PID})'",
+      "echo \"✅ CIS hardening started in background (PID: $${CIS_PID})\"",
       "echo '📋 Logs available at: /var/log/cis-hardening.log'",
       "echo '⏳ Waiting for hardening to complete...'"
     ]
