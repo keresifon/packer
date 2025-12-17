@@ -575,37 +575,49 @@ jobs:
           IAM_INSTANCE_PROFILE="${{ steps.config-validation.outputs.validation_iam_instance_profile }}"
           SECURITY_GROUP_IDS="${{ steps.config-validation.outputs.validation_security_group_ids }}"
           
-          # Build run-instances command
-          RUN_INSTANCES_CMD="aws ec2 run-instances \
-            --image-id \"$AMI_ID\" \
-            --instance-type \"$INSTANCE_TYPE\" \
-            --security-group-ids \"$SG_ID\""
+          # Collect all security group IDs (validation SG + additional SGs)
+          # When using subnet, we must use security-group-ids (not group-name)
+          # Start with the validation security group
+          SG_IDS_LIST="$SG_ID"
+          if [ -n "$SECURITY_GROUP_IDS" ] && [ "$SECURITY_GROUP_IDS" != "" ]; then
+            # Convert comma-separated to space-separated (AWS CLI accepts space-separated IDs)
+            ADDITIONAL_SGS=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
+            SG_IDS_LIST="$SG_ID $ADDITIONAL_SGS"
+          fi
           
-          # Add VPC/subnet if provided
-          if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "" ]; then
-            RUN_INSTANCES_CMD="$RUN_INSTANCES_CMD --subnet-id \"$SUBNET_ID\""
+          # Build run-instances command array to avoid quote escaping issues
+          RUN_INSTANCES_ARGS=(
+            "run-instances"
+            "--image-id" "$AMI_ID"
+            "--instance-type" "$INSTANCE_TYPE"
+            "--security-group-ids"
+          )
+          # Split space-separated security group IDs into array elements
+          for sg_id in $SG_IDS_LIST; do
+            RUN_INSTANCES_ARGS+=("$sg_id")
+          done
+          
+          # Add subnet if provided (when using subnet, must use security-group-ids, not group-name)
+          if [ -n "$SUBNET_ID" ] && [ "$SUBNET_ID" != "" ]; then
+            RUN_INSTANCES_ARGS+=("--subnet-id" "$SUBNET_ID")
           fi
           
           # Add IAM instance profile (required for SSM)
           if [ -n "$IAM_INSTANCE_PROFILE" ] && [ "$IAM_INSTANCE_PROFILE" != "" ]; then
-            RUN_INSTANCES_CMD="$RUN_INSTANCES_CMD --iam-instance-profile Name=\"$IAM_INSTANCE_PROFILE\""
+            RUN_INSTANCES_ARGS+=("--iam-instance-profile" "Name=$IAM_INSTANCE_PROFILE")
           else
             echo "⚠️  WARNING: IAM instance profile not set. SSM Session Manager may not work."
           fi
           
-          # Add additional security groups if provided
-          if [ -n "$SECURITY_GROUP_IDS" ] && [ "$SECURITY_GROUP_IDS" != "" ]; then
-            # Convert comma-separated to space-separated
-            ADDITIONAL_SGS=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
-            RUN_INSTANCES_CMD="$RUN_INSTANCES_CMD --security-group-ids \"$SG_ID $ADDITIONAL_SGS\""
-          fi
+          # Add tags
+          RUN_INSTANCES_ARGS+=(
+            "--tag-specifications" "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Purpose,Value=AMI-Validation},{Key=Build,Value=${{ github.run_id }}]"
+            "--region" "${{ env.PKR_VAR_aws_region }}"
+            "--query" "Instances[0].InstanceId"
+            "--output" "text"
+          )
           
-          RUN_INSTANCES_CMD="$RUN_INSTANCES_CMD --tag-specifications \"ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Purpose,Value=AMI-Validation},{Key=Build,Value=${{ github.run_id }}}]\" \
-            --region ${{ env.PKR_VAR_aws_region }} \
-            --query 'Instances[0].InstanceId' \
-            --output text"
-          
-          INSTANCE_ID=$(eval $RUN_INSTANCES_CMD)
+          INSTANCE_ID=$(aws ec2 "${RUN_INSTANCES_ARGS[@]}")
           
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "Test instance launched: $INSTANCE_ID"
