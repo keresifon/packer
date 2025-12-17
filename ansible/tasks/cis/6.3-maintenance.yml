@@ -32,6 +32,7 @@
     owner: root
     group: root
     mode: '0700'
+    state: directory
   when: (cis_level | default(cis_level_default) | int) >= 2
 
 - name: Ensure permissions on /etc/cron.hourly are configured (Level 2)
@@ -40,6 +41,7 @@
     owner: root
     group: root
     mode: '0700'
+    state: directory
   when: (cis_level | default(cis_level_default) | int) >= 2
 
 - name: Ensure permissions on /etc/cron.monthly are configured (Level 2)
@@ -48,6 +50,7 @@
     owner: root
     group: root
     mode: '0700'
+    state: directory
   when: (cis_level | default(cis_level_default) | int) >= 2
 
 - name: Ensure permissions on /etc/cron.weekly are configured (Level 2)
@@ -56,6 +59,7 @@
     owner: root
     group: root
     mode: '0700'
+    state: directory
   when: (cis_level | default(cis_level_default) | int) >= 2
 
 - name: Ensure at/cron is restricted to authorized users (Level 2)
