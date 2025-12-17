@@ -257,8 +257,20 @@ build {
 
   # Provisioning: Wait for CIS Hardening to Complete
   # Poll status file until hardening completes (max 30 minutes)
+  # Uses trap to ensure script self-deletes even on early exit
   provisioner "shell" {
     inline = [
+      "# Setup cleanup trap for self-deletion",
+      "cleanup_wait_script() {",
+      "  SCRIPT_PATH=\"$${BASH_SOURCE[0]:-}\"",
+      "  if [ -n \"$${SCRIPT_PATH}\" ] && [ -f \"$${SCRIPT_PATH}\" ]; then",
+      "    if [[ \"$${SCRIPT_PATH}\" == /tmp/script_*.sh ]] || [[ \"$${SCRIPT_PATH}\" == /tmp/packer-shell* ]]; then",
+      "      (sleep 0.1; rm -f \"$${SCRIPT_PATH}\" 2>/dev/null) &",
+      "      rm -f \"$${SCRIPT_PATH}\" 2>/dev/null || true",
+      "    fi",
+      "  fi",
+      "}",
+      "trap cleanup_wait_script EXIT",
       "if [ \"${var.enable_cis_hardening}\" != \"true\" ]; then",
       "  exit 0",
       "fi",
@@ -345,15 +357,20 @@ build {
       "echo 'Last 100 lines of log:'",
       "tail -100 /var/log/cis-hardening.log 2>/dev/null || echo 'Log file not found'",
       "EXIT_CODE=1",
-      "fi",
-      "# Self-delete this script to prevent Packer cleanup errors",
+      "# Self-delete this script immediately to prevent Packer cleanup errors",
+      "# Do this before final exit to ensure it happens",
       "SCRIPT_PATH=\"$${BASH_SOURCE[0]:-}\"",
       "if [ -n \"$${SCRIPT_PATH}\" ] && [ -f \"$${SCRIPT_PATH}\" ]; then",
       "  if [[ \"$${SCRIPT_PATH}\" == /tmp/script_*.sh ]] || [[ \"$${SCRIPT_PATH}\" == /tmp/packer-shell* ]]; then",
-      "    (sleep 0.2; rm -f \"$${SCRIPT_PATH}\" 2>/dev/null) &",
+      "    # Try immediate deletion",
       "    rm -f \"$${SCRIPT_PATH}\" 2>/dev/null || true",
+      "    # Also try background deletion as fallback",
+      "    (sleep 0.1; rm -f \"$${SCRIPT_PATH}\" 2>/dev/null) &",
+      "    # Small delay to let deletion happen",
+      "    sleep 0.1",
       "  fi",
       "fi",
+      "# Exit with tracked exit code (trap will also try to clean up)",
       "exit $${EXIT_CODE:-0}"
     ]
   }
