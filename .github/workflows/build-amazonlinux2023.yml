@@ -8,21 +8,6 @@ on:
         required: false
         default: 'us-east-1'
         type: string
-      vpc_id:
-        description: 'VPC ID (required for private subnet)'
-        required: false
-        default: ''
-        type: string
-      subnet_id:
-        description: 'Private subnet ID (required for private subnet)'
-        required: false
-        default: ''
-        type: string
-      iam_instance_profile:
-        description: 'IAM instance profile name for SSM Session Manager'
-        required: false
-        default: ''
-        type: string
       target_regions:
         description: 'Comma-separated list of target regions to copy AMI (overrides config/build-config.yml)'
         required: false
@@ -50,18 +35,23 @@ on:
 
 env:
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
-  PKR_VAR_vpc_id: ${{ github.event.inputs.vpc_id || '' }}
-  PKR_VAR_subnet_id: ${{ github.event.inputs.subnet_id || '' }}
-  PKR_VAR_iam_instance_profile: ${{ github.event.inputs.iam_instance_profile || '' }}
   TARGET_REGIONS: ${{ github.event.inputs.target_regions || '' }}
   STORE_IN_PARAMETER_STORE: ${{ github.event.inputs.store_in_parameter_store || 'true' }}
+  # VPC Configuration from GitHub Variables/Secrets
+  PKR_VAR_vpc_id: ${{ vars.VPC_ID || secrets.VPC_ID || '' }}
+  PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || secrets.SUBNET_ID || '' }}
+  PKR_VAR_security_group_ids: ${{ vars.SECURITY_GROUP_IDS || secrets.SECURITY_GROUP_IDS || '' }}
+  PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || secrets.IAM_INSTANCE_PROFILE || '' }}
+  # AWS Credentials from GitHub Secrets
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
 
 jobs:
   validate:
     name: Validate Packer Template
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Required for OIDC
       contents: read
     steps:
       - name: Checkout code
@@ -78,11 +68,21 @@ jobs:
         with:
           version: "1.10.0"
 
-      - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.PKR_VAR_aws_region }}
+      - name: Configure AWS Credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Verify AWS credentials are set
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ ERROR: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set as GitHub secrets"
+            exit 1
+          fi
+          echo "✅ AWS credentials configured"
+          # Test AWS credentials
+          aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
       - name: Install Ansible
         run: |
@@ -96,11 +96,16 @@ jobs:
         run: packer init amazonlinux2023-golden-image.pkr.hcl
 
       - name: Validate Packer template
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
         run: |
           # Validation requires iam_instance_profile when using session_manager
-          # Pass a dummy value for validation (actual value comes from config during build)
+          # Use actual value from GitHub variables/secrets or dummy for validation
+          IAM_PROFILE="${PKR_VAR_iam_instance_profile:-validation-dummy}"
           packer validate \
-            -var="iam_instance_profile=validation-dummy" \
+            -var="iam_instance_profile=$IAM_PROFILE" \
             -var="ssh_username=ec2-user" \
             amazonlinux2023-golden-image.pkr.hcl
 
@@ -110,7 +115,6 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/amazonlinux2023-vpc-private-subnet')
     permissions:
-      id-token: write  # Required for OIDC
       contents: read
     outputs:
       ami_id: ${{ steps.build.outputs.ami_id }}
@@ -172,11 +176,21 @@ jobs:
         with:
           version: "1.10.0"
 
-      - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.PKR_VAR_aws_region }}
+      - name: Configure AWS Credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Verify AWS credentials are set
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ ERROR: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set as GitHub secrets"
+            exit 1
+          fi
+          echo "✅ AWS credentials configured"
+          # Test AWS credentials
+          aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
       - name: Install Ansible
         run: |
@@ -191,6 +205,11 @@ jobs:
 
       - name: Build Packer image
         id: build
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
         run: |
           set -e  # Exit on error
           
@@ -203,10 +222,28 @@ jobs:
           CIS_THRESHOLD="${{ steps.config.outputs.config_cis_threshold || '80' }}"
           FAIL_ON_NON_COMPLIANCE="${{ steps.config.outputs.config_fail_on_non_compliance || 'false' }}"
           
-          # VPC Configuration (workflow inputs override config)
-          VPC_ID="${{ env.PKR_VAR_vpc_id || steps.config.outputs.config_vpc_id || '' }}"
-          SUBNET_ID="${{ env.PKR_VAR_subnet_id || steps.config.outputs.config_subnet_id || '' }}"
-          IAM_INSTANCE_PROFILE="${{ env.PKR_VAR_iam_instance_profile || steps.config.outputs.config_iam_instance_profile || '' }}"
+          # VPC Configuration from GitHub Variables/Secrets (priority: env vars > config file)
+          VPC_ID="${{ env.PKR_VAR_vpc_id }}"
+          SUBNET_ID="${{ env.PKR_VAR_subnet_id }}"
+          SECURITY_GROUP_IDS="${{ env.PKR_VAR_security_group_ids }}"
+          IAM_INSTANCE_PROFILE="${{ env.PKR_VAR_iam_instance_profile }}"
+          
+          # Fallback to config file if GitHub variables not set
+          if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "" ]; then
+            VPC_ID="${{ steps.config.outputs.config_vpc_id || '' }}"
+          fi
+          if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "" ]; then
+            SUBNET_ID="${{ steps.config.outputs.config_subnet_id || '' }}"
+          fi
+          if [ -z "$IAM_INSTANCE_PROFILE" ] || [ "$IAM_INSTANCE_PROFILE" = "" ]; then
+            IAM_INSTANCE_PROFILE="${{ steps.config.outputs.config_iam_instance_profile || '' }}"
+          fi
+          
+          # Parse security group IDs (comma-separated string to JSON array)
+          if [ -z "$SECURITY_GROUP_IDS" ] || [ "$SECURITY_GROUP_IDS" = "" ]; then
+            # Try to read from config file
+            SECURITY_GROUP_IDS=$(yq eval '.vpc.security_group_ids[]' config/build-config.yml 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo "")
+          fi
           
           # Read additional config values for Packer
           BLOCK_DEVICE_NAME=$(yq eval '.block_device.device_name' config/build-config.yml || echo "/dev/xvda")
@@ -369,17 +406,26 @@ jobs:
     runs-on: ubuntu-latest
     if: success() && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != '' && needs.build.outputs.ami_id != 'null'
     permissions:
-      id-token: write  # Required for OIDC
       contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.PKR_VAR_aws_region }}
+      - name: Configure AWS Credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Verify AWS credentials are set
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ ERROR: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set as GitHub secrets"
+            exit 1
+          fi
+          echo "✅ AWS credentials configured"
+          # Test AWS credentials
+          aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
       - name: Verify AWS CLI and install dependencies
         run: |
@@ -469,6 +515,11 @@ jobs:
 
       - name: Copy AMI to target regions
         id: copy-ami
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
         run: |
           SOURCE_AMI_ID="${{ needs.build.outputs.ami_id }}"
           SOURCE_REGION="${{ env.PKR_VAR_aws_region }}"
@@ -551,6 +602,11 @@ jobs:
 
       - name: Store AMI IDs in Parameter Store
         if: steps.config-parameter-store.outputs.parameter_store_enabled == 'true' && env.STORE_IN_PARAMETER_STORE == 'true' && steps.copy-ami.outputs.copied_amis != '{}'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
         run: |
           SOURCE_AMI_ID="${{ needs.build.outputs.ami_id }}"
           SOURCE_REGION="${{ env.PKR_VAR_aws_region }}"
