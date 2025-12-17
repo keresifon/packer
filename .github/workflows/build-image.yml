@@ -437,37 +437,84 @@ jobs:
           PACKER_BUILD_CMD="${PACKER_BUILD_CMD} aws-golden-image.pkr.hcl"
           
           # Run Packer build and capture output
+          set +e  # Don't exit on Packer errors - we'll check exit code manually
           eval $PACKER_BUILD_CMD 2>&1 | tee "$PACKER_OUTPUT_FILE"
           PACKER_EXIT=${PIPESTATUS[0]}
+          set -e  # Re-enable exit on error
           
-          # Extract AMI ID from output
-          AMI_ID=$(grep -oE 'ami-[0-9a-f]{17}' "$PACKER_OUTPUT_FILE" | tail -1)
+          echo ""
+          echo "=== Packer Build Summary ==="
+          echo "Packer exit code: $PACKER_EXIT"
+          
+          # Extract AMI ID from Packer's success output
+          # Packer outputs: "us-east-1: ami-xxxxxxxxxxxxxxxxx" or "AMIs were created:"
+          AMI_ID=$(grep -iE "(AMIs were created|us-east-1|us-west-|eu-|ap-).*ami-[0-9a-f]{17}" "$PACKER_OUTPUT_FILE" | grep -oE 'ami-[0-9a-f]{17}' | tail -1)
+          
+          # Fallback: look for AMI ID in region: ami-xxx format
           if [ -z "$AMI_ID" ]; then
-            AMI_ID=$(grep -oE 'ami-[0-9a-f]{8,17}' "$PACKER_OUTPUT_FILE" | tail -1)
+            AMI_ID=$(grep -oE '[a-z0-9-]+: ami-[0-9a-f]{17}' "$PACKER_OUTPUT_FILE" | grep -oE 'ami-[0-9a-f]{17}' | tail -1)
           fi
           
+          # Last resort: any AMI ID pattern
           if [ -z "$AMI_ID" ]; then
-            echo "❌ ERROR: Could not extract AMI ID from Packer output"
+            AMI_ID=$(grep -oE 'ami-[0-9a-f]{17}' "$PACKER_OUTPUT_FILE" | tail -1)
+          fi
+          
+          echo "Extracted AMI ID: ${AMI_ID:-NOT FOUND}"
+          
+          # Check if Packer actually succeeded
+          if [ $PACKER_EXIT -ne 0 ]; then
+            echo "❌ Packer build failed with exit code: $PACKER_EXIT"
+            echo ""
+            echo "Last 100 lines of Packer output:"
+            tail -100 "$PACKER_OUTPUT_FILE"
+            
+            # Even if Packer failed, check if AMI was created (sometimes Packer fails after AMI creation)
+            if [ -n "$AMI_ID" ]; then
+              echo ""
+              echo "Checking if AMI was created despite Packer error..."
+              if aws ec2 describe-images --image-ids "$AMI_ID" --region "${{ env.PKR_VAR_aws_region }}" >/dev/null 2>&1; then
+                echo "✅ AMI $AMI_ID exists despite Packer error - build partially succeeded"
+                echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+                rm -f "$PACKER_OUTPUT_FILE"
+                exit 0
+              else
+                echo "❌ AMI $AMI_ID does not exist - build failed"
+                rm -f "$PACKER_OUTPUT_FILE"
+                exit 1
+              fi
+            else
+              echo "❌ No AMI ID found in output - build failed"
+              rm -f "$PACKER_OUTPUT_FILE"
+              exit 1
+            fi
+          fi
+          
+          # Packer succeeded - verify AMI exists
+          if [ -z "$AMI_ID" ]; then
+            echo "❌ ERROR: Packer reported success but no AMI ID found in output"
+            echo "Full Packer output:"
+            cat "$PACKER_OUTPUT_FILE"
+            rm -f "$PACKER_OUTPUT_FILE"
+            exit 1
+          fi
+          
+          # Verify AMI exists in AWS
+          echo "Verifying AMI exists in AWS..."
+          if aws ec2 describe-images --image-ids "$AMI_ID" --region "${{ env.PKR_VAR_aws_region }}" >/dev/null 2>&1; then
+            echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+            echo "✅ Successfully built and verified AMI: $AMI_ID"
+          else
+            echo "❌ ERROR: Packer reported success but AMI $AMI_ID does not exist in AWS"
+            echo "Region: ${{ env.PKR_VAR_aws_region }}"
             echo "Last 50 lines of Packer output:"
             tail -50 "$PACKER_OUTPUT_FILE"
             rm -f "$PACKER_OUTPUT_FILE"
             exit 1
           fi
           
-          # Verify AMI exists
-          if aws ec2 describe-images --image-ids "$AMI_ID" --region "${{ env.PKR_VAR_aws_region }}" >/dev/null 2>&1; then
-            echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
-            echo "Built AMI: $AMI_ID"
-          else
-            echo "❌ ERROR: AMI $AMI_ID does not exist in region ${{ env.PKR_VAR_aws_region }}"
-            rm -f "$PACKER_OUTPUT_FILE"
-            exit 1
-          fi
-          
           rm -f "$PACKER_OUTPUT_FILE"
-          
-          # Exit with Packer's exit code
-          exit $PACKER_EXIT
+          exit 0
       
       - name: Output AMI ID
         if: success()

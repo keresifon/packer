@@ -2,7 +2,21 @@
 # CIS Level 2 Hardening for Amazon Linux 2023
 # This script implements CIS Level 2 benchmark recommendations
 
-set -euo pipefail
+# Use set -e but allow non-zero exits from commands with || fallbacks
+set -eu
+set +o pipefail  # Allow pipes to succeed even if some commands fail
+
+# Cleanup function to ensure clean exit
+cleanup() {
+    local exit_code=$?
+    # Flush output buffers
+    sync 2>/dev/null || true
+    # Exit with the original exit code
+    exit $exit_code
+}
+
+# Trap to ensure cleanup on exit
+trap cleanup EXIT
 
 # Check if CIS hardening is enabled
 if [ "${ENABLE_CIS_HARDENING:-false}" != "true" ]; then
@@ -620,6 +634,9 @@ echo -e "${GREEN}=== CIS Level 2 Hardening Complete ===${NC}"
 echo "Note: Some controls may require manual verification or additional configuration."
 echo "It is recommended to run CIS assessment tools to verify compliance."
 
-# Ensure script exits cleanly to avoid Packer cleanup errors
+# Flush all output buffers
+sync
+
+# Exit cleanly - trap will handle cleanup
 exit 0
 

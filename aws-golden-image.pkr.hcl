@@ -178,7 +178,7 @@ build {
     ]
   }
   
-  # Provisioning: Install AWS CLI (required for CIS tools download from S3)
+  # Provisioning: Install AWS CLI (optional - useful for general AWS operations)
   provisioner "shell" {
     inline = [
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
@@ -192,18 +192,8 @@ build {
     ]
   }
 
-  # Provisioning: Download CIS tools from S3 (if bucket is configured)
-  provisioner "shell" {
-    environment_vars = [
-      "CIS_S3_BUCKET=${var.cis_s3_bucket}",
-      "CIS_S3_PREFIX=${var.cis_s3_prefix}",
-      "AWS_REGION=${var.aws_region}",
-      "ENABLE_CIS_HARDENING=${var.enable_cis_hardening}"
-    ]
-    script = "scripts/cis/download-cis-tools.sh"
-  }
-
   # Provisioning: Apply CIS Level 2 Hardening
+  # Note: CIS tools (OpenSCAP, SCAP content) are downloaded in the separate assessment job, not during build
   provisioner "shell" {
     environment_vars = [
       "ENABLE_CIS_HARDENING=${var.enable_cis_hardening}"
