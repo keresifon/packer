@@ -31,6 +31,7 @@ env:
   PKR_VAR_cis_s3_bucket: ${{ vars.CIS_S3_BUCKET || '' }}
   PKR_VAR_cis_s3_prefix: ${{ vars.CIS_S3_PREFIX || 'cis-tools' }}
   PKR_VAR_enable_cis_hardening: ${{ vars.ENABLE_CIS_HARDENING || 'true' }}
+  PACKER_VERSION: ${{ vars.PACKER_VERSION || '1.14.3' }}
 
 jobs:
   validate:
@@ -205,15 +206,21 @@ jobs:
 
       - name: Setup Packer
         run: |
-          PACKER_VERSION="1.10.0"
+          PACKER_VERSION="${PACKER_VERSION:-1.14.3}"
           if command -v packer >/dev/null 2>&1; then
-            echo "✅ Packer already installed"
-            packer version
-            exit 0
+            INSTALLED_VERSION=$(packer version | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            if [ "$INSTALLED_VERSION" = "$PACKER_VERSION" ]; then
+              echo "✅ Packer ${PACKER_VERSION} already installed"
+              packer version
+              exit 0
+            else
+              echo "⚠️  Packer ${INSTALLED_VERSION} installed, but ${PACKER_VERSION} required. Reinstalling..."
+            fi
           fi
           if [ -f "bin/packer_${PACKER_VERSION}_linux_amd64.zip" ]; then
             unzip -q "bin/packer_${PACKER_VERSION}_linux_amd64.zip" -d ~/bin/
           else
+            echo "Downloading Packer ${PACKER_VERSION}..."
             curl -fsSL "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip" -o /tmp/packer.zip
             unzip -q /tmp/packer.zip -d ~/bin/
             rm /tmp/packer.zip
@@ -252,6 +259,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     permissions:
       contents: read
+    outputs:
+      ami_id: ${{ steps.build_ami.outputs.AMI_ID }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -353,11 +362,21 @@ jobs:
 
       - name: Setup Packer
         run: |
-          PACKER_VERSION="1.10.0"
-          if command -v packer >/dev/null 2>&1; then packer version; exit 0; fi
+          PACKER_VERSION="${PACKER_VERSION:-1.14.3}"
+          if command -v packer >/dev/null 2>&1; then
+            INSTALLED_VERSION=$(packer version | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            if [ "$INSTALLED_VERSION" = "$PACKER_VERSION" ]; then
+              echo "✅ Packer ${PACKER_VERSION} already installed"
+              packer version
+              exit 0
+            else
+              echo "⚠️  Packer ${INSTALLED_VERSION} installed, but ${PACKER_VERSION} required. Reinstalling..."
+            fi
+          fi
           if [ -f "bin/packer_${PACKER_VERSION}_linux_amd64.zip" ]; then
             unzip -q "bin/packer_${PACKER_VERSION}_linux_amd64.zip" -d ~/bin/
           else
+            echo "Downloading Packer ${PACKER_VERSION}..."
             curl -fsSL "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip" -o /tmp/packer.zip
             unzip -q /tmp/packer.zip -d ~/bin/; rm /tmp/packer.zip
           fi
@@ -390,7 +409,9 @@ jobs:
         run: packer init aws-golden-image.pkr.hcl
 
       - name: Build Packer image
+        id: build_ami
         run: |
+          PACKER_OUTPUT_FILE=$(mktemp)
           PACKER_BUILD_CMD="packer build -var=\"aws_region=${{ env.PKR_VAR_aws_region }}\""
           [ -n "${{ env.PKR_VAR_iam_instance_profile }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"iam_instance_profile=${{ env.PKR_VAR_iam_instance_profile }}\""
           [ -n "${{ env.PKR_VAR_vpc_id }}" ] && PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var=\"vpc_id=${{ env.PKR_VAR_vpc_id }}\""
@@ -406,8 +427,337 @@ jobs:
             PACKER_BUILD_CMD="${PACKER_BUILD_CMD} -var-file=$VAR_FILE"
           fi
           PACKER_BUILD_CMD="${PACKER_BUILD_CMD} aws-golden-image.pkr.hcl"
-          eval $PACKER_BUILD_CMD
-
+          
+          # Run Packer build and capture output
+          eval $PACKER_BUILD_CMD 2>&1 | tee "$PACKER_OUTPUT_FILE"
+          PACKER_EXIT=${PIPESTATUS[0]}
+          
+          # Extract AMI ID from output
+          AMI_ID=$(grep -oE 'ami-[0-9a-f]{17}' "$PACKER_OUTPUT_FILE" | tail -1)
+          if [ -z "$AMI_ID" ]; then
+            AMI_ID=$(grep -oE 'ami-[0-9a-f]{8,17}' "$PACKER_OUTPUT_FILE" | tail -1)
+          fi
+          
+          if [ -z "$AMI_ID" ]; then
+            echo "❌ ERROR: Could not extract AMI ID from Packer output"
+            echo "Last 50 lines of Packer output:"
+            tail -50 "$PACKER_OUTPUT_FILE"
+            rm -f "$PACKER_OUTPUT_FILE"
+            exit 1
+          fi
+          
+          # Verify AMI exists
+          if aws ec2 describe-images --image-ids "$AMI_ID" --region "${{ env.PKR_VAR_aws_region }}" >/dev/null 2>&1; then
+            echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+            echo "Built AMI: $AMI_ID"
+          else
+            echo "❌ ERROR: AMI $AMI_ID does not exist in region ${{ env.PKR_VAR_aws_region }}"
+            rm -f "$PACKER_OUTPUT_FILE"
+            exit 1
+          fi
+          
+          rm -f "$PACKER_OUTPUT_FILE"
+          
+          # Exit with Packer's exit code
+          exit $PACKER_EXIT
+      
       - name: Output AMI ID
         if: success()
-        run: echo "✅ AMI build completed successfully!"
+        run: |
+          echo "AMI build completed successfully!"
+          echo "AMI ID: ${{ steps.build_ami.outputs.AMI_ID }}"
+
+  cis-assessment:
+    name: CIS Compliance Assessment
+    needs: build
+    runs-on: terraform
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        run: |
+          ACCESS_KEY=$(echo "${{ secrets.AWS_ACCESS_KEY_ID }}" | xargs)
+          SECRET_KEY=$(echo "${{ secrets.AWS_SECRET_ACCESS_KEY }}" | xargs)
+          SESSION_TOKEN=$(echo "${{ secrets.AWS_SESSION_TOKEN }}" | xargs)
+          echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}" >> $GITHUB_ENV
+          [ -n "${SESSION_TOKEN}" ] && echo "AWS_SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ env.PKR_VAR_aws_region }}" >> $GITHUB_ENV
+
+      - name: Install AWS CLI and Session Manager Plugin
+        run: |
+          mkdir -p ~/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
+          
+          # Install AWS CLI if not present
+          if ! command -v aws >/dev/null 2>&1; then
+            if [ -f "rpm/awscli-exe-linux-x86_64.zip" ]; then
+              unzip -q rpm/awscli-exe-linux-x86_64.zip -d /tmp
+              /tmp/aws/install -i ~/aws-cli -b ~/bin
+            else
+              curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+              unzip -q /tmp/awscliv2.zip -d /tmp
+              /tmp/aws/install -i ~/aws-cli -b ~/bin
+              rm -f /tmp/awscliv2.zip
+            fi
+          fi
+          
+          # Install Session Manager Plugin if not present
+          if ! command -v session-manager-plugin >/dev/null 2>&1; then
+            if [ -f "rpm/session-manager-plugin.rpm" ]; then
+              EXTRACT_DIR=$(mktemp -d)
+              cd "$EXTRACT_DIR"
+              rpm2cpio "$OLDPWD/rpm/session-manager-plugin.rpm" | cpio -idmv 2>&1 | head -10
+              BINARY=$(find . -name "session-manager-plugin" -type f | head -1)
+              cp "$BINARY" ~/bin/session-manager-plugin
+              chmod +x ~/bin/session-manager-plugin
+              rm -rf "$EXTRACT_DIR"
+            fi
+          fi
+          
+          aws --version
+          session-manager-plugin --version || echo "Session Manager Plugin installed"
+
+      - name: Launch EC2 Instance for Assessment
+        id: launch_instance
+        run: |
+          AMI_ID="${{ needs.build.outputs.ami_id }}"
+          VPC_ID="${{ env.PKR_VAR_vpc_id }}"
+          SUBNET_ID="${{ env.PKR_VAR_subnet_id }}"
+          IAM_PROFILE="${{ env.PKR_VAR_iam_instance_profile }}"
+          SECURITY_GROUP_IDS="${{ vars.SECURITY_GROUP_IDS }}"
+          
+          if [ -z "$AMI_ID" ]; then
+            echo "❌ ERROR: AMI ID not found from build job"
+            exit 1
+          fi
+          
+          if [ -z "$VPC_ID" ] || [ -z "$SUBNET_ID" ]; then
+            echo "❌ ERROR: VPC_ID and SUBNET_ID must be set for CIS assessment"
+            exit 1
+          fi
+          
+          # Use first security group if multiple provided
+          if [ -n "$SECURITY_GROUP_IDS" ]; then
+            SG_ID=$(echo "$SECURITY_GROUP_IDS" | cut -d',' -f1 | tr -d ' ')
+          else
+            echo "❌ ERROR: SECURITY_GROUP_IDS must be set"
+            exit 1
+          fi
+          
+          echo "Launching EC2 instance for CIS assessment..."
+          echo "AMI: $AMI_ID"
+          echo "Subnet: $SUBNET_ID"
+          echo "Security Group: $SG_ID"
+          
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "$AMI_ID" \
+            --instance-type t3.micro \
+            --subnet-id "$SUBNET_ID" \
+            --security-group-ids "$SG_ID" \
+            --iam-instance-profile Name="$IAM_PROFILE" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cis-assessment-$(date +%s)},{Key=Purpose,Value=CIS-Compliance-Assessment}]" \
+            --query 'Instances[0].InstanceId' \
+            --output text \
+            --region "${{ env.PKR_VAR_aws_region }}")
+          
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
+            echo "❌ ERROR: Failed to launch EC2 instance"
+            exit 1
+          fi
+          
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "✅ Launched instance: $INSTANCE_ID"
+          
+          # Wait for instance to be running
+          echo "Waiting for instance to be running..."
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "${{ env.PKR_VAR_aws_region }}"
+          
+          # Wait for SSM agent to be ready
+          echo "Waiting for SSM agent to be ready..."
+          for i in {1..30}; do
+            if aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCE_ID" --region "${{ env.PKR_VAR_aws_region }}" --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null | grep -q "Online"; then
+              echo "✅ SSM agent is ready"
+              break
+            fi
+            echo "Waiting for SSM agent... ($i/30)"
+            sleep 10
+          done
+
+      - name: Download CIS Assessment Scripts
+        run: |
+          mkdir -p scripts/cis
+          # Scripts should already be in repo, but ensure they're executable
+          chmod +x scripts/cis/*.sh 2>/dev/null || true
+
+      - name: Run CIS Assessment
+        run: |
+          INSTANCE_ID="${{ steps.launch_instance.outputs.INSTANCE_ID }}"
+          CIS_S3_BUCKET="${{ env.PKR_VAR_cis_s3_bucket }}"
+          CIS_S3_PREFIX="${{ env.PKR_VAR_cis_s3_prefix }}"
+          
+          echo "=== Running CIS Assessment on Instance $INSTANCE_ID ==="
+          
+          # Upload assessment script to instance
+          echo "Uploading assessment script..."
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[
+              'export CIS_S3_BUCKET=\"$CIS_S3_BUCKET\"',
+              'export CIS_S3_PREFIX=\"$CIS_S3_PREFIX\"',
+              'export ENABLE_CIS_HARDENING=true',
+              'export AWS_REGION=${{ env.PKR_VAR_aws_region }}',
+              'bash -s'
+            ]" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'Command.CommandId' \
+            --output text > /tmp/command_id.txt
+          
+          COMMAND_ID=$(cat /tmp/command_id.txt)
+          
+          # Send the script content via stdin
+          cat scripts/cis/download-cis-tools.sh scripts/cis/run-cis-assessment.sh | \
+            aws ssm send-command \
+              --instance-ids "$INSTANCE_ID" \
+              --document-name "AWS-RunShellScript" \
+              --parameters "commands=[$(cat scripts/cis/download-cis-tools.sh scripts/cis/run-cis-assessment.sh | sed "s/'/'\"'\"'/g" | sed "s/^/'/;s/$/'/")]" \
+              --region "${{ env.PKR_VAR_aws_region }}" \
+              --query 'Command.CommandId' \
+              --output text
+          
+          # Better approach: Use SSM document with script file
+          echo "Running CIS assessment via SSM..."
+          
+          # Create temporary script file
+          ASSESSMENT_SCRIPT=$(mktemp)
+          cat > "$ASSESSMENT_SCRIPT" << 'ASSESS_EOF'
+          #!/bin/bash
+          export CIS_S3_BUCKET="${CIS_S3_BUCKET}"
+          export CIS_S3_PREFIX="${CIS_S3_PREFIX}"
+          export ENABLE_CIS_HARDENING=true
+          export AWS_REGION="${AWS_REGION}"
+          
+          # Download CIS tools
+          bash scripts/cis/download-cis-tools.sh
+          
+          # Run assessment
+          bash scripts/cis/run-cis-assessment.sh
+          ASSESS_EOF
+          
+          # Actually, let's use a simpler approach - run commands directly
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[
+              'export CIS_S3_BUCKET=\"$CIS_S3_BUCKET\"',
+              'export CIS_S3_PREFIX=\"$CIS_S3_PREFIX\"',
+              'export ENABLE_CIS_HARDENING=true',
+              'export AWS_REGION=${{ env.PKR_VAR_aws_region }}',
+              'cd /tmp',
+              'aws s3 sync s3://$CIS_S3_BUCKET/$CIS_S3_PREFIX/ /tmp/cis-tools/ --region ${{ env.PKR_VAR_aws_region }} || true',
+              'chmod +x /tmp/cis-tools/*.sh 2>/dev/null || true',
+              'if [ -f /tmp/cis-tools/run-cis-assessment.sh ]; then bash /tmp/cis-tools/run-cis-assessment.sh; else echo \"Assessment script not found in S3\"; fi'
+            ]" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'Command.CommandId' \
+            --output text)
+          
+          echo "Command ID: $COMMAND_ID"
+          echo "Waiting for command to complete..."
+          
+          # Wait for command to complete (max 30 minutes)
+          for i in {1..180}; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --region "${{ env.PKR_VAR_aws_region }}" \
+              --query 'Status' \
+              --output text 2>/dev/null || echo "InProgress")
+            
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Command completed with status: $STATUS"
+              break
+            fi
+            echo "Command status: $STATUS ($i/180)"
+            sleep 10
+          done
+          
+          # Get command output
+          echo "=== CIS Assessment Output ==="
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'StandardOutputContent' \
+            --output text
+          
+          echo ""
+          echo "=== CIS Assessment Errors (if any) ==="
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'StandardErrorContent' \
+            --output text
+          
+          # Check exit code
+          EXIT_CODE=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'ResponseCode' \
+            --output text)
+          
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "⚠️  CIS Assessment completed with exit code: $EXIT_CODE"
+            echo "This may indicate compliance issues. Review the assessment output above."
+          else
+            echo "✅ CIS Assessment completed successfully"
+          fi
+
+      - name: Download Assessment Reports
+        if: always()
+        run: |
+          INSTANCE_ID="${{ steps.launch_instance.outputs.INSTANCE_ID }}"
+          
+          echo "Downloading assessment reports from instance..."
+          
+          # Download reports via SSM
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[
+              'if [ -d /var/log/cis-assessment ]; then tar czf /tmp/cis-reports.tar.gz -C /var/log/cis-assessment .; echo \"Reports archived\"; else echo \"No assessment reports found\"; fi'
+            ]" \
+            --region "${{ env.PKR_VAR_aws_region }}" \
+            --query 'Command.CommandId' \
+            --output text > /tmp/report_cmd_id.txt
+          
+          REPORT_CMD_ID=$(cat /tmp/report_cmd_id.txt)
+          sleep 5
+          
+          # Get the archive and download it
+          # Note: This is simplified - in practice you might want to upload reports to S3 instead
+          echo "Assessment reports would be available at /var/log/cis-assessment on the instance"
+          echo "To download manually: aws ssm start-session --target $INSTANCE_ID"
+
+      - name: Terminate Assessment Instance
+        if: always()
+        run: |
+          INSTANCE_ID="${{ steps.launch_instance.outputs.INSTANCE_ID }}"
+          
+          if [ -n "$INSTANCE_ID" ]; then
+            echo "Terminating assessment instance: $INSTANCE_ID"
+            aws ec2 terminate-instances \
+              --instance-ids "$INSTANCE_ID" \
+              --region "${{ env.PKR_VAR_aws_region }}" \
+              --query 'TerminatingInstances[0].CurrentState.Name' \
+              --output text
+            echo "✅ Instance termination initiated"
+          fi

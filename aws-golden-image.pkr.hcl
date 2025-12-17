@@ -211,14 +211,8 @@ build {
     script = "scripts/cis/cis-level2-hardening.sh"
   }
 
-  # Provisioning: Run CIS Assessment (optional - runs assessment tools if available)
-  provisioner "shell" {
-    environment_vars = [
-      "CIS_S3_BUCKET=${var.cis_s3_bucket}",
-      "ENABLE_CIS_HARDENING=${var.enable_cis_hardening}"
-    ]
-    script = "scripts/cis/run-cis-assessment.sh"
-  }
+  # Note: CIS Assessment is now run as a separate validation job after AMI creation
+  # This allows assessment to run on a fresh instance launched from the built AMI
 
   # Provisioning: Configure SSH (CIS hardening may have already configured this)
   provisioner "shell" {
