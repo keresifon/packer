@@ -2,23 +2,16 @@
 # AMI Validation Playbook
 # Runs comprehensive validation tests on a newly created AMI instance
 # Modular version using task files
-# This validates both CIS compliance and functional requirements
+# This validates functional requirements and basic security checks
+# Note: CIS compliance is validated during the build process, not here
 
 - name: AMI Validation and Testing
   hosts: all
   become: yes
   gather_facts: yes
 
-  vars_files:
-    - vars/cis-defaults.yml
-
   vars:
     fail_on_validation_failure: false
-
-  pre_tasks:
-    - name: Convert cis_level to integer (handle string from Packer)
-      set_fact:
-        cis_level: "{{ (cis_level | default(cis_level_default)) | int }}"
 
   tasks:
     - name: Display validation start message
@@ -38,69 +31,6 @@
         - name: Run functional validation tests
           include_tasks: tasks/validation/functional-tests.yml
 
-    # CIS Compliance Re-check
-    - name: CIS Compliance Validation
-      block:
-        - name: CIS 1.1 Compliance Checks - Filesystem
-          include_tasks: tasks/compliance/1.1-filesystem.yml
-
-        - name: CIS 1.4 Compliance Checks - Boot Settings
-          include_tasks: tasks/compliance/1.4-boot.yml
-
-        - name: CIS 1.5 Compliance Checks - Process Hardening
-          include_tasks: tasks/compliance/1.5-process.yml
-
-        - name: CIS 1.6 Compliance Checks - MAC
-          include_tasks: tasks/compliance/1.6-mac.yml
-
-        - name: CIS 3.1 Compliance Checks - Network
-          include_tasks: tasks/compliance/3.1-network.yml
-
-        - name: CIS 4.1 Compliance Checks - Logging
-          include_tasks: tasks/compliance/4.1-logging.yml
-
-        - name: CIS 5.1 Compliance Checks - Time Sync
-          include_tasks: tasks/compliance/5.1-time-sync.yml
-
-        - name: CIS 5.2 Compliance Checks - SSH (Level 2)
-          include_tasks: tasks/compliance/5.2-ssh.yml
-
-        - name: CIS 6.1 Compliance Checks - File Permissions
-          include_tasks: tasks/compliance/6.1-file-permissions.yml
-
-        - name: CIS 6.2 Compliance Checks - User/Group (Level 2)
-          include_tasks: tasks/compliance/6.2-user-group.yml
-
-        - name: CIS 6.3 Compliance Checks - Maintenance (Level 2)
-          include_tasks: tasks/compliance/6.3-maintenance.yml
-
-        - name: Calculate CIS compliance
-          include_tasks: tasks/compliance/calculate-compliance.yml
-
-        - name: Display CIS compliance report
-          debug:
-            msg:
-              - "=========================================="
-              - "CIS Compliance Report (Post-Build)"
-              - "=========================================="
-              - "Passed: {{ compliance_passed }}/{{ compliance_total }}"
-              - "Compliance: {{ compliance_percentage }}%"
-              - "Threshold: {{ cis_compliance_threshold }}%"
-              - "Level: {{ cis_level }}"
-              - "=========================================="
-
-        - name: Display failed checks
-          debug:
-            msg: "Failed checks: {{ compliance_failed_checks | join(', ') }}"
-          when: compliance_failed_checks | length > 0
-
-        - name: Fail if CIS compliance below threshold
-          fail:
-            msg: "CIS compliance ({{ compliance_percentage }}%) is below threshold ({{ cis_compliance_threshold }}%)"
-          when:
-            - compliance_percentage | int < cis_compliance_threshold | int
-            - fail_on_validation_failure | bool
-
     # Security Tests
     - name: Security Validation
       block:
@@ -112,9 +42,8 @@
       set_fact:
         validation_summary:
           functional_tests: "PASS"
-          cis_compliance: "{{ compliance_percentage }}%"
           security_checks: "PASS"
-          overall_status: "{{ 'PASS' if compliance_percentage | int >= cis_compliance_threshold | int else 'FAIL' }}"
+          overall_status: "PASS"
 
     - name: Display Final Validation Report
       debug:
@@ -123,14 +52,7 @@
           - "AMI Validation Summary"
           - "=========================================="
           - "Functional Tests: {{ validation_summary.functional_tests }}"
-          - "CIS Compliance: {{ validation_summary.cis_compliance }}"
           - "Security Checks: {{ validation_summary.security_checks }}"
           - "Overall Status: {{ validation_summary.overall_status }}"
+          - "Note: CIS compliance is validated during build, not in post-build validation"
           - "=========================================="
-
-    - name: Fail validation if overall status is FAIL
-      fail:
-        msg: "AMI validation failed. Check the validation report above for details."
-      when:
-        - validation_summary.overall_status == "FAIL"
-        - fail_on_validation_failure | bool
