@@ -56,6 +56,9 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Set up PATH for user-installed tools
+        run: echo "$HOME/.local/bin:$PATH" >> $GITHUB_PATH
+        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -130,6 +133,9 @@ jobs:
     outputs:
       ami_id: ${{ steps.build.outputs.ami_id }}
     steps:
+      - name: Set up PATH for user-installed tools
+        run: echo "$HOME/.local/bin:$PATH" >> $GITHUB_PATH
+        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
 
