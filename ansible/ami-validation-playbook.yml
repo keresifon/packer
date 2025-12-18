@@ -8,12 +8,29 @@
 - name: AMI Validation and Testing
   hosts: all
   become: yes
-  gather_facts: yes
+  gather_facts: no
 
   vars:
     fail_on_validation_failure: false
 
   tasks:
+    - name: Gather basic system information
+      shell: |
+        echo "HOSTNAME=$(hostname)"
+        echo "OS=$(cat /etc/os-release | grep '^NAME=' | cut -d'"' -f2 || echo 'Unknown')"
+        echo "VERSION=$(cat /etc/os-release | grep '^VERSION_ID=' | cut -d'"' -f2 || echo 'Unknown')"
+        echo "KERNEL=$(uname -r)"
+      register: system_info
+      changed_when: false
+      failed_when: false
+
+    - name: Extract system information
+      set_fact:
+        ansible_hostname: "{{ system_info.stdout_lines | select('match', '^HOSTNAME=') | first | regex_replace('^HOSTNAME=', '') | default('unknown') }}"
+        ansible_distribution: "{{ system_info.stdout_lines | select('match', '^OS=') | first | regex_replace('^OS=', '') | default('Unknown') }}"
+        ansible_distribution_version: "{{ system_info.stdout_lines | select('match', '^VERSION=') | first | regex_replace('^VERSION=', '') | default('Unknown') }}"
+        ansible_kernel: "{{ system_info.stdout_lines | select('match', '^KERNEL=') | first | regex_replace('^KERNEL=', '') | default('unknown') }}"
+
     - name: Display validation start message
       debug:
         msg:
@@ -54,5 +71,4 @@
           - "Functional Tests: {{ validation_summary.functional_tests }}"
           - "Security Checks: {{ validation_summary.security_checks }}"
           - "Overall Status: {{ validation_summary.overall_status }}"
-          - "Note: CIS compliance is validated during build, not in post-build validation"
           - "=========================================="

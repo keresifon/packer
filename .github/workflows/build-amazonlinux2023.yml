@@ -674,8 +674,6 @@ jobs:
           INSTANCE_ID="${{ steps.launch-instance.outputs.instance_id }}"
           
           # Use config values for validation
-          VALIDATION_CIS_LEVEL="${{ steps.config-validation.outputs.validation_cis_level || '2' }}"
-          VALIDATION_CIS_THRESHOLD="${{ steps.config-validation.outputs.validation_cis_threshold || '80' }}"
           VALIDATION_FAIL_ON_FAILURE="${{ steps.config-validation.outputs.validation_fail_on_failure || 'false' }}"
           
           # Create Ansible inventory file for SSM
@@ -708,119 +706,45 @@ jobs:
           ansible-playbook \
             -i /tmp/validation-inventory.ini \
             ansible/ami-validation-playbook.yml \
-            -e "cis_level=$VALIDATION_CIS_LEVEL" \
-            -e "cis_compliance_threshold=$VALIDATION_CIS_THRESHOLD" \
             -e "fail_on_validation_failure=$VALIDATION_FAIL_ON_FAILURE" \
             -v 2>&1 | tee validation-output.log
           
           VALIDATION_EXIT=$?
           echo "validation_exit_code=$VALIDATION_EXIT" >> $GITHUB_OUTPUT
 
-      - name: Generate CIS Compliance Summary from Validation
+      - name: Generate Validation Summary
         if: always()
         run: |
-          echo "## 🔒 CIS Compliance Report (Post-Build Validation)" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ AMI Validation Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Extract compliance information from validation output
-          # Look for both "CIS Compliance Report" and "CIS Compliance Report (Post-Build)"
-          # Ansible debug output may be formatted differently with -v flag
-          if [ -f validation-output.log ] && (grep -q "CIS Compliance Report" validation-output.log || grep -q "compliance_percentage" validation-output.log); then
-            # Extract compliance percentage - try multiple patterns
-            # Pattern 1: "Compliance: XX%"
-            COMPLIANCE_PCT=$(grep -oP "Compliance:\s*\K[0-9]+" validation-output.log | tail -1 || echo "")
-            # Pattern 2: Look in JSON-like output from Ansible debug
-            if [ -z "$COMPLIANCE_PCT" ] || [ "$COMPLIANCE_PCT" = "" ]; then
-              COMPLIANCE_PCT=$(grep -oP '"Compliance":\s*"?\K[0-9]+' validation-output.log | tail -1 || echo "")
-            fi
-            # Pattern 3: Look for "compliance_percentage" variable
-            if [ -z "$COMPLIANCE_PCT" ] || [ "$COMPLIANCE_PCT" = "" ]; then
-              COMPLIANCE_PCT=$(grep -oP '"compliance_percentage":\s*\K[0-9]+' validation-output.log | tail -1 || echo "")
-            fi
-            COMPLIANCE_PCT=${COMPLIANCE_PCT:-"N/A"}
-            
-            # Extract passed/total - try multiple patterns
-            PASSED=$(grep -oP "Passed:\s*\K[0-9]+" validation-output.log | tail -1 || echo "")
-            if [ -z "$PASSED" ] || [ "$PASSED" = "" ]; then
-              PASSED=$(grep -oP '"compliance_passed":\s*\K[0-9]+' validation-output.log | tail -1 || echo "")
-            fi
-            PASSED=${PASSED:-"N/A"}
-            
-            TOTAL=$(grep -oP "Passed:\s*[0-9]+/\K[0-9]+" validation-output.log | tail -1 || echo "")
-            if [ -z "$TOTAL" ] || [ "$TOTAL" = "" ]; then
-              TOTAL=$(grep -oP '"compliance_total":\s*\K[0-9]+' validation-output.log | tail -1 || echo "")
-            fi
-            TOTAL=${TOTAL:-"N/A"}
-            
-            THRESHOLD=$(grep -oP "Threshold:\s*\K[0-9]+" validation-output.log | tail -1 || echo "")
-            if [ -z "$THRESHOLD" ] || [ "$THRESHOLD" = "" ]; then
-              THRESHOLD=$(grep -oP '"cis_compliance_threshold":\s*\K[0-9]+' validation-output.log | tail -1 || echo "")
-            fi
-            THRESHOLD=${THRESHOLD:-"80"}
-            
-            if [ "$COMPLIANCE_PCT" != "N/A" ]; then
-              # Determine status
-              if [ "$COMPLIANCE_PCT" -ge "$THRESHOLD" ]; then
-                STATUS_ICON="✅"
-                STATUS="PASS"
-              else
-                STATUS_ICON="❌"
-                STATUS="FAIL"
-              fi
-              
-              echo "### $STATUS_ICON Status: **$STATUS**" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-              echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-              echo "| **Compliance** | **$COMPLIANCE_PCT%** |" >> $GITHUB_STEP_SUMMARY
-              echo "| Threshold | $THRESHOLD% |" >> $GITHUB_STEP_SUMMARY
-              echo "| Passed Checks | $PASSED / $TOTAL |" >> $GITHUB_STEP_SUMMARY
-              echo "| CIS Level | 2 |" >> $GITHUB_STEP_SUMMARY
+          if [ -f validation-output.log ]; then
+            # Extract validation results
+            if grep -q "AMI Validation Summary" validation-output.log; then
+              echo "### Validation Status" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
               
-              # Extract failed checks if available
-              if grep -q "Failed checks:" validation-output.log; then
-                FAILED_CHECKS=$(grep -o '"Failed checks:[^"]*"' validation-output.log | sed 's/"Failed checks: *//;s/"$//' | head -1)
-                if [ -z "$FAILED_CHECKS" ]; then
-                  FAILED_CHECKS=$(grep "Failed checks:" validation-output.log | grep -v "^[[:space:]]*}" | sed -n 's/.*Failed checks:[[:space:]]*\([^}]*\).*/\1/p' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -1)
-                fi
-                FAILED_CHECKS=$(echo "$FAILED_CHECKS" | sed 's/[{}"]//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                if [ -n "$FAILED_CHECKS" ] && echo "$FAILED_CHECKS" | grep -q '[A-Za-z0-9]'; then
-                  echo "### ❌ Failed Checks" >> $GITHUB_STEP_SUMMARY
-                  echo "" >> $GITHUB_STEP_SUMMARY
-                  echo "$FAILED_CHECKS" | sed 's/, */\n/g' | sed 's/^[[:space:]]*//' | sed '/^$/d' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
-                  echo "" >> $GITHUB_STEP_SUMMARY
-                fi
-              fi
+              # Extract functional tests status
+              FUNCTIONAL_STATUS=$(grep -oP "Functional Tests:\s*\K[A-Z]+" validation-output.log | tail -1 || echo "UNKNOWN")
+              SECURITY_STATUS=$(grep -oP "Security Checks:\s*\K[A-Z]+" validation-output.log | tail -1 || echo "UNKNOWN")
+              OVERALL_STATUS=$(grep -oP "Overall Status:\s*\K[A-Z]+" validation-output.log | tail -1 || echo "UNKNOWN")
               
-              echo "---" >> $GITHUB_STEP_SUMMARY
+              echo "| Test Category | Status |" >> $GITHUB_STEP_SUMMARY
+              echo "|---------------|--------|" >> $GITHUB_STEP_SUMMARY
+              echo "| **Functional Tests** | **$FUNCTIONAL_STATUS** |" >> $GITHUB_STEP_SUMMARY
+              echo "| **Security Checks** | **$SECURITY_STATUS** |" >> $GITHUB_STEP_SUMMARY
+              echo "| **Overall Status** | **$OVERALL_STATUS** |" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
-              echo "> 📋 This is the post-build validation compliance check. For build-time compliance, check the build job summary." >> $GITHUB_STEP_SUMMARY
             else
-              echo "⚠️ Could not extract compliance information from validation logs." >> $GITHUB_STEP_SUMMARY
+              echo "⚠️ Could not find validation summary in logs." >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
-              echo "### Debug: Sample validation log output" >> $GITHUB_STEP_SUMMARY
+              echo "### Last 20 lines of validation log:" >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
-              # Show lines containing compliance-related keywords
-              grep -i "compliance\|passed\|threshold" validation-output.log | tail -20 >> $GITHUB_STEP_SUMMARY || echo "No compliance-related output found" >> $GITHUB_STEP_SUMMARY
+              tail -20 validation-output.log >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
             fi
           else
-            echo "⚠️ CIS compliance check not found in validation logs." >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            if [ -f validation-output.log ]; then
-              echo "### Debug: Checking validation log" >> $GITHUB_STEP_SUMMARY
-              echo "- Log file exists: ✅ ($(wc -l < validation-output.log) lines)" >> $GITHUB_STEP_SUMMARY
-              echo "- Contains 'CIS Compliance Report': $(grep -q 'CIS Compliance Report' validation-output.log && echo '✅' || echo '❌')" >> $GITHUB_STEP_SUMMARY
-              echo "- Contains 'compliance_percentage': $(grep -q 'compliance_percentage' validation-output.log && echo '✅' || echo '❌')" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "### Last 30 lines of validation log:" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              tail -30 validation-output.log >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-            else
-              echo "❌ validation-output.log file not found" >> $GITHUB_STEP_SUMMARY
-            fi
+            echo "❌ validation-output.log file not found" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Upload validation report
