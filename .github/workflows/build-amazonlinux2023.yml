@@ -66,16 +66,40 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Verify yq is installed
+      - name: Verify all required tools are installed
         run: |
+          echo "=========================================="
+          echo "Verifying Required Tools"
+          echo "=========================================="
+          
+          # Verify yq
           command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
           echo "✅ yq: $(yq --version)"
-
-      - name: Verify Ansible is installed
-        run: |
+          
+          # Verify Ansible
           command -v ansible >/dev/null 2>&1 || { echo "❌ ERROR: Ansible is not installed. Please install it on the runner."; exit 1; }
           echo "✅ Ansible: $(ansible --version | head -1)"
           echo "   Location: $(which ansible)"
+          
+          # Verify AWS CLI
+          command -v aws >/dev/null 2>&1 || { echo "❌ ERROR: AWS CLI is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ AWS CLI: $(aws --version)"
+          
+          # Verify jq
+          command -v jq >/dev/null 2>&1 || { echo "❌ ERROR: jq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ jq: $(jq --version)"
+          
+          # Verify pip3
+          command -v pip3 >/dev/null 2>&1 || { echo "❌ ERROR: pip3 is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ pip3: $(pip3 --version)"
+          
+          # Verify pyyaml
+          python3 -c "import yaml" >/dev/null 2>&1 || { echo "❌ ERROR: pyyaml is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ pyyaml: installed"
+          
+          echo "=========================================="
+          echo "All required tools verified successfully"
+          echo "=========================================="
 
       - name: Setup Packer
         uses: hashicorp/setup-packer@main
@@ -152,11 +176,6 @@ jobs:
         shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Verify yq is installed
-        run: |
-          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
-          echo "✅ yq: $(yq --version)"
 
       - name: Read build configuration
         id: config
@@ -482,17 +501,6 @@ jobs:
           # Test AWS credentials
           aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
-      - name: Verify dependencies for validation
-        run: |
-          command -v jq >/dev/null 2>&1 || { echo "❌ ERROR: jq is not installed. Please install it on the runner."; exit 1; }
-          echo "✅ jq: $(jq --version)"
-          # Validation now uses bash scripts via SSM instead of Ansible
-
-      - name: Verify AWS CLI is installed
-        run: |
-          command -v aws >/dev/null 2>&1 || { echo "❌ ERROR: AWS CLI is not installed. Please install it on the runner."; exit 1; }
-          echo "✅ AWS CLI: $(aws --version)"
-
       - name: Wait for AMI to be available
         run: |
           AMI_ID="${{ needs.build.outputs.ami_id }}"
@@ -502,11 +510,6 @@ jobs:
             --region ${{ env.PKR_VAR_aws_region }} \
             --max-attempts 30 \
             --delay 10 || echo "AMI may still be initializing"
-
-      - name: Verify yq is installed
-        run: |
-          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
-          echo "✅ yq: $(yq --version)"
 
       - name: Read build configuration for validation
         id: config-validation
@@ -893,24 +896,6 @@ jobs:
           # Test AWS credentials
           aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
-      - name: Verify required tools are installed
-        run: |
-          # Verify AWS CLI
-          command -v aws >/dev/null 2>&1 || { echo "❌ ERROR: AWS CLI is not installed. Please install it on the runner."; exit 1; }
-          echo "✅ AWS CLI: $(aws --version)"
-          
-          # Verify jq
-          command -v jq >/dev/null 2>&1 || { echo "❌ ERROR: jq is not installed. Please install it on the runner."; exit 1; }
-          echo "✅ jq: $(jq --version)"
-          
-          # Verify pip3
-          command -v pip3 >/dev/null 2>&1 || { echo "❌ ERROR: pip3 is not installed. Please install it on the runner."; exit 1; }
-          echo "✅ pip3: $(pip3 --version)"
-          
-          # Verify pyyaml
-          python3 -c "import yaml" >/dev/null 2>&1 || { echo "❌ ERROR: pyyaml is not installed. Please install it on the runner."; exit 1; }
-          echo "✅ pyyaml: installed"
-
       - name: Parse target regions from config or input
         id: parse-regions
         run: |
@@ -1054,11 +1039,6 @@ jobs:
           echo "=========================================="
           echo "$COPIED_AMIS_JSON" | jq -r 'to_entries[] | "\(.key): \(.value)"'
           echo "=========================================="
-
-      - name: Verify yq is installed
-        run: |
-          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
-          echo "✅ yq: $(yq --version)"
 
       - name: Read Parameter Store configuration
         id: config-parameter-store
