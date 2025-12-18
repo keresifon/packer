@@ -680,7 +680,7 @@ jobs:
           # Use aws_ssm connection plugin from community.aws collection
           cat > /tmp/validation-inventory.ini << EOF
           [validation]
-          $INSTANCE_ID ansible_connection=aws_ssm ansible_user=ec2-user
+          $INSTANCE_ID ansible_connection=aws_ssm ansible_aws_ssm_bucket_name= ansible_aws_ssm_region=${{ env.PKR_VAR_aws_region }}
           EOF
           
           # Create ansible.cfg to configure SSM connection
@@ -688,10 +688,17 @@ jobs:
           [defaults]
           host_key_checking = False
           inventory = /tmp/validation-inventory.ini
+          deprecation_warnings = False
+          interpreter_python = auto_silent
+          
           [inventory]
           enable_plugins = host_list, ini
+          
           [connection]
-          pipelining = True
+          pipelining = False
+          
+          [ssh_connection]
+          ssh_args = -o ControlMaster=auto -o ControlPersist=60s
           EOF
           
           # Set environment variables for AWS credentials (required for SSM connection)
@@ -703,11 +710,19 @@ jobs:
           # Run validation playbook using SSM
           # The aws_ssm connection plugin uses AWS credentials from environment
           # Capture both stdout and stderr (Ansible debug messages go to stderr)
+          
+          # Debug: Check SSM connectivity first
+          echo "Testing SSM connectivity to instance $INSTANCE_ID..."
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} || echo "Warning: SSM describe failed"
+          
+          # Run playbook with increased verbosity for debugging
           ansible-playbook \
             -i /tmp/validation-inventory.ini \
             ansible/ami-validation-playbook.yml \
             -e "fail_on_validation_failure=$VALIDATION_FAIL_ON_FAILURE" \
-            -v 2>&1 | tee validation-output.log
+            -vvv 2>&1 | tee validation-output.log
           
           VALIDATION_EXIT=$?
           echo "validation_exit_code=$VALIDATION_EXIT" >> $GITHUB_OUTPUT
