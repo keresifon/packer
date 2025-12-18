@@ -1,0 +1,1145 @@
+name: Build Amazon Linux 2023 Golden Image Hardened
+
+on:
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: 'AWS region'
+        required: false
+        default: 'us-east-1'
+        type: string
+      target_regions:
+        description: 'Comma-separated list of target regions to copy AMI (overrides config/build-config.yml)'
+        required: false
+        default: ''
+        type: string
+      store_in_parameter_store:
+        description: 'Store AMI IDs in Systems Manager Parameter Store'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+  push:
+    branches:
+      - self-hosted
+    paths:
+      - 'amazonlinux2023-golden-image.pkr.hcl'
+      - 'ansible/**'
+      - 'config/**'
+      - '.github/workflows/build-amazonlinux2023.yml'
+  pull_request:
+    branches:
+      - self-hosted
+
+env:
+  PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  TARGET_REGIONS: ${{ github.event.inputs.target_regions || '' }}
+  STORE_IN_PARAMETER_STORE: ${{ github.event.inputs.store_in_parameter_store || 'true' }}
+  # VPC Configuration from GitHub Variables/Secrets
+  # Note: security_group_ids is a list type and cannot be set via PKR_VAR_ env var
+  # It must be passed via -var flag in the packer build command
+  PKR_VAR_vpc_id: ${{ vars.VPC_ID || secrets.VPC_ID || '' }}
+  PKR_VAR_subnet_id: ${{ vars.SUBNET_ID || secrets.SUBNET_ID || '' }}
+  SECURITY_GROUP_IDS: ${{ vars.SECURITY_GROUP_IDS || secrets.SECURITY_GROUP_IDS || '' }}
+  PKR_VAR_iam_instance_profile: ${{ vars.IAM_INSTANCE_PROFILE || secrets.IAM_INSTANCE_PROFILE || '' }}
+  # AWS Credentials from GitHub Secrets
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+
+jobs:
+  validate:
+    name: Validate Packer Template
+    runs-on: terraform
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify yq is installed
+        run: |
+          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ yq: $(yq --version)"
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: ${{ vars.PACKER_VERSION || '1.10.0' }}
+
+      - name: Configure AWS Credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Verify AWS credentials are set
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ ERROR: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set as GitHub secrets"
+            exit 1
+          fi
+          echo "✅ AWS credentials configured"
+          # Test AWS credentials
+          aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
+
+      - name: Initialize Packer
+        env:
+          PACKER_GITHUB_API_TOKEN: ${{ github.token }}
+        run: packer init amazonlinux2023-golden-image.pkr.hcl
+
+      - name: Validate Packer template
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          # Validation requires iam_instance_profile when using session_manager
+          # Use actual value from GitHub variables/secrets or dummy for validation
+          IAM_PROFILE="${PKR_VAR_iam_instance_profile:-validation-dummy}"
+          VPC_ID="${PKR_VAR_vpc_id:-}"
+          SUBNET_ID="${PKR_VAR_subnet_id:-}"
+          
+          # Build validation command array to avoid quote escaping issues
+          VALIDATE_ARGS=("validate")
+          VALIDATE_ARGS+=("-var" "iam_instance_profile=$IAM_PROFILE")
+          VALIDATE_ARGS+=("-var" "ssh_username=ec2-user")
+          
+          # Add VPC config if provided (optional for validation)
+          if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "" ]; then
+            VALIDATE_ARGS+=("-var" "vpc_id=$VPC_ID")
+          fi
+          if [ -n "$SUBNET_ID" ] && [ "$SUBNET_ID" != "" ]; then
+            VALIDATE_ARGS+=("-var" "subnet_id=$SUBNET_ID")
+          fi
+          
+          # Note: security_group_ids is skipped during validation as it's a list type
+          # and not required for template validation
+          
+          packer "${VALIDATE_ARGS[@]}" amazonlinux2023-golden-image.pkr.hcl
+
+  build:
+    name: Build AMI
+    needs: validate
+    runs-on: terraform
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/amazonlinux2023-vpc-private-subnet')
+    permissions:
+      contents: read
+    outputs:
+      ami_id: ${{ steps.build.outputs.ami_id }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify yq is installed
+        run: |
+          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ yq: $(yq --version)"
+
+      - name: Read build configuration
+        id: config
+        run: |
+          # Read config values and set outputs
+          CONFIG_FILE="config/build-config.yml"
+          
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "Warning: $CONFIG_FILE not found, using defaults"
+            exit 0
+          fi
+          
+          # Extract values from config
+          DEFAULT_REGION=$(yq eval '.build.default_region' "$CONFIG_FILE" || echo "us-east-1")
+          BUILD_NAME=$(yq eval '.build.build_name' "$CONFIG_FILE" || echo "amazonlinux2023-golden-image")
+          INSTANCE_TYPE=$(yq eval '.instance.build_instance_type' "$CONFIG_FILE" || echo "t3.micro")
+          SSH_USERNAME=$(yq eval '.instance.ssh_username' "$CONFIG_FILE" || echo "ec2-user")
+          CIS_LEVEL=$(yq eval '.cis.default_level' "$CONFIG_FILE" || echo "2")
+          CIS_THRESHOLD=$(yq eval '.cis.default_compliance_threshold' "$CONFIG_FILE" || echo "80")
+          FAIL_ON_NON_COMPLIANCE=$(yq eval '.cis.default_fail_on_non_compliance' "$CONFIG_FILE" || echo "false")
+          PARAMETER_STORE_ENABLED=$(yq eval '.parameter_store.enabled' "$CONFIG_FILE" || echo "true")
+          PARAMETER_STORE_BASE_PATH=$(yq eval '.parameter_store.base_path' "$CONFIG_FILE" || echo "/packer/amazonlinux2023-golden-image")
+          
+          # VPC Configuration
+          VPC_ID=$(yq eval '.vpc.vpc_id' "$CONFIG_FILE" || echo "")
+          SUBNET_ID=$(yq eval '.vpc.subnet_id' "$CONFIG_FILE" || echo "")
+          IAM_INSTANCE_PROFILE=$(yq eval '.vpc.iam_instance_profile' "$CONFIG_FILE" || echo "")
+          
+          # Set outputs (workflow inputs override config)
+          echo "config_default_region=$DEFAULT_REGION" >> $GITHUB_OUTPUT
+          echo "config_build_name=$BUILD_NAME" >> $GITHUB_OUTPUT
+          echo "config_instance_type=$INSTANCE_TYPE" >> $GITHUB_OUTPUT
+          echo "config_ssh_username=$SSH_USERNAME" >> $GITHUB_OUTPUT
+          echo "config_cis_level=$CIS_LEVEL" >> $GITHUB_OUTPUT
+          echo "config_cis_threshold=$CIS_THRESHOLD" >> $GITHUB_OUTPUT
+          echo "config_fail_on_non_compliance=$FAIL_ON_NON_COMPLIANCE" >> $GITHUB_OUTPUT
+          echo "config_parameter_store_enabled=$PARAMETER_STORE_ENABLED" >> $GITHUB_OUTPUT
+          echo "config_parameter_store_base_path=$PARAMETER_STORE_BASE_PATH" >> $GITHUB_OUTPUT
+          echo "config_vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+          echo "config_subnet_id=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "config_iam_instance_profile=$IAM_INSTANCE_PROFILE" >> $GITHUB_OUTPUT
+          
+          echo "✅ Configuration loaded from build-config.yml"
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: ${{ vars.PACKER_VERSION || '1.10.0' }}
+
+      - name: Configure AWS Credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Verify AWS credentials are set
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ ERROR: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set as GitHub secrets"
+            exit 1
+          fi
+          echo "✅ AWS credentials configured"
+          # Test AWS credentials
+          aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
+
+      - name: Verify Ansible is installed
+        run: |
+          command -v ansible >/dev/null 2>&1 || { echo "❌ ERROR: Ansible is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ Ansible: $(ansible --version | head -1)"
+
+      - name: Initialize Packer
+        env:
+          PACKER_GITHUB_API_TOKEN: ${{ github.token }}
+        run: packer init amazonlinux2023-golden-image.pkr.hcl
+
+      - name: Build Packer image
+        id: build
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          set -e  # Exit on error
+          
+          # Use config values if available, otherwise use workflow inputs/defaults
+          AWS_REGION="${{ env.PKR_VAR_aws_region }}"
+          INSTANCE_TYPE="${{ steps.config.outputs.config_instance_type || 't3.micro' }}"
+          IMAGE_NAME="${{ steps.config.outputs.config_build_name || 'amazonlinux2023-golden-image' }}"
+          SSH_USERNAME="${{ steps.config.outputs.config_ssh_username || 'ec2-user' }}"
+          CIS_LEVEL="${{ steps.config.outputs.config_cis_level || '2' }}"
+          CIS_THRESHOLD="${{ steps.config.outputs.config_cis_threshold || '80' }}"
+          FAIL_ON_NON_COMPLIANCE="${{ steps.config.outputs.config_fail_on_non_compliance || 'false' }}"
+          
+          # VPC Configuration from GitHub Variables/Secrets (priority: env vars > config file)
+          VPC_ID="${{ env.PKR_VAR_vpc_id }}"
+          SUBNET_ID="${{ env.PKR_VAR_subnet_id }}"
+          # Note: security_group_ids is a list type and cannot use PKR_VAR_ env var
+          # It must be passed via -var flag, so we use SECURITY_GROUP_IDS (without PKR_VAR_ prefix)
+          SECURITY_GROUP_IDS="${{ env.SECURITY_GROUP_IDS }}"
+          IAM_INSTANCE_PROFILE="${{ env.PKR_VAR_iam_instance_profile }}"
+          
+          # Fallback to config file if GitHub variables not set
+          if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "" ]; then
+            VPC_ID="${{ steps.config.outputs.config_vpc_id || '' }}"
+          fi
+          if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "" ]; then
+            SUBNET_ID="${{ steps.config.outputs.config_subnet_id || '' }}"
+          fi
+          if [ -z "$IAM_INSTANCE_PROFILE" ] || [ "$IAM_INSTANCE_PROFILE" = "" ]; then
+            IAM_INSTANCE_PROFILE="${{ steps.config.outputs.config_iam_instance_profile || '' }}"
+          fi
+          
+          # Parse security group IDs (comma-separated string to JSON array)
+          if [ -z "$SECURITY_GROUP_IDS" ] || [ "$SECURITY_GROUP_IDS" = "" ]; then
+            # Try to read from config file
+            SECURITY_GROUP_IDS=$(yq eval '.vpc.security_group_ids[]' config/build-config.yml 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo "")
+          fi
+          
+          # Read additional config values for Packer
+          BLOCK_DEVICE_NAME=$(yq eval '.block_device.device_name' config/build-config.yml || echo "/dev/xvda")
+          VOLUME_SIZE=$(yq eval '.block_device.volume_size' config/build-config.yml || echo "20")
+          VOLUME_TYPE=$(yq eval '.block_device.volume_type' config/build-config.yml || echo "gp3")
+          VOLUME_ENCRYPTED=$(yq eval '.block_device.encrypted' config/build-config.yml || echo "true")
+          TAG_OS=$(yq eval '.tags.os' config/build-config.yml || echo "AmazonLinux2023")
+          TAG_MANAGED_BY=$(yq eval '.tags.managed_by' config/build-config.yml || echo "Packer")
+          TAG_ENVIRONMENT=$(yq eval '.tags.environment' config/build-config.yml || echo "Production")
+          
+          # Build Packer command using array to avoid quote escaping issues
+          PACKER_ARGS=("build")
+          PACKER_ARGS+=("-var" "aws_region=$AWS_REGION")
+          PACKER_ARGS+=("-var" "instance_type=$INSTANCE_TYPE")
+          PACKER_ARGS+=("-var" "image_name=$IMAGE_NAME")
+          PACKER_ARGS+=("-var" "cis_level=$CIS_LEVEL")
+          PACKER_ARGS+=("-var" "cis_compliance_threshold=$CIS_THRESHOLD")
+          PACKER_ARGS+=("-var" "fail_on_non_compliance=$FAIL_ON_NON_COMPLIANCE")
+          PACKER_ARGS+=("-var" "block_device_name=$BLOCK_DEVICE_NAME")
+          PACKER_ARGS+=("-var" "volume_size=$VOLUME_SIZE")
+          PACKER_ARGS+=("-var" "volume_type=$VOLUME_TYPE")
+          PACKER_ARGS+=("-var" "volume_encrypted=$VOLUME_ENCRYPTED")
+          PACKER_ARGS+=("-var" "tag_os=$TAG_OS")
+          PACKER_ARGS+=("-var" "tag_managed_by=$TAG_MANAGED_BY")
+          PACKER_ARGS+=("-var" "tag_environment=$TAG_ENVIRONMENT")
+          PACKER_ARGS+=("-var" "ssh_username=$SSH_USERNAME")
+          
+          # Add VPC configuration if provided
+          if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "" ]; then
+            PACKER_ARGS+=("-var" "vpc_id=$VPC_ID")
+            echo "✅ Using VPC: $VPC_ID"
+          else
+            echo "⚠️  WARNING: VPC_ID not set. Set it as GitHub variable/secret (VPC_ID) or in config file"
+          fi
+          
+          if [ -n "$SUBNET_ID" ] && [ "$SUBNET_ID" != "" ]; then
+            PACKER_ARGS+=("-var" "subnet_id=$SUBNET_ID")
+            echo "✅ Using subnet: $SUBNET_ID"
+          else
+            echo "⚠️  WARNING: SUBNET_ID not set. Set it as GitHub variable/secret (SUBNET_ID) or in config file"
+          fi
+          
+          # Add security group IDs if provided (comma-separated or JSON array)
+          if [ -n "$SECURITY_GROUP_IDS" ] && [ "$SECURITY_GROUP_IDS" != "" ]; then
+            # Convert comma-separated string to JSON array format for Packer
+            # Packer expects: ["sg-xxx","sg-yyy"]
+            if [[ "$SECURITY_GROUP_IDS" == *"["* ]]; then
+              # Already JSON format
+              PACKER_ARGS+=("-var" "security_group_ids=$SECURITY_GROUP_IDS")
+            else
+              # Convert comma-separated to JSON array
+              SG_JSON=$(echo "$SECURITY_GROUP_IDS" | tr ',' '\n' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//' | sed 's/^/[/;s/$/]/')
+              PACKER_ARGS+=("-var" "security_group_ids=$SG_JSON")
+            fi
+            echo "✅ Using security groups: $SECURITY_GROUP_IDS"
+          fi
+          
+          # IAM instance profile is required when using SSM Session Manager
+          if [ -n "$IAM_INSTANCE_PROFILE" ] && [ "$IAM_INSTANCE_PROFILE" != "" ]; then
+            PACKER_ARGS+=("-var" "iam_instance_profile=$IAM_INSTANCE_PROFILE")
+            echo "✅ Using IAM instance profile: $IAM_INSTANCE_PROFILE"
+          else
+            echo "❌ ERROR: iam_instance_profile is required when using SSM Session Manager"
+            echo "Please set it as GitHub variable/secret (IAM_INSTANCE_PROFILE) or in config file (vpc.iam_instance_profile)"
+            exit 1
+          fi
+          
+          # Run packer build and capture exit code
+          packer "${PACKER_ARGS[@]}" amazonlinux2023-golden-image.pkr.hcl | tee packer-build.log
+          
+          PACKER_EXIT_CODE=${PIPESTATUS[0]}
+          
+          # Check if packer build succeeded
+          if [ $PACKER_EXIT_CODE -ne 0 ]; then
+            echo "❌ Packer build failed with exit code: $PACKER_EXIT_CODE"
+            echo "Build log saved to packer-build.log"
+            exit $PACKER_EXIT_CODE
+          fi
+          
+          # Extract AMI ID from Packer output (only if build succeeded)
+          AMI_ID=""
+          
+          # Pattern 1: Look for "AMIs were created:" followed by region and AMI ID
+          AMI_ID=$(grep -A 2 "AMIs were created:" packer-build.log | grep -oE 'ami-[a-z0-9]{17}' | head -1 || echo "")
+          
+          # Pattern 2: Look for "region: ami-xxxxx" format
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "" ]; then
+            AMI_ID=$(grep -oE '[a-z0-9-]+: ami-[a-z0-9]{17}' packer-build.log | tail -1 | grep -oE 'ami-[a-z0-9]{17}' || echo "")
+          fi
+          
+          # Pattern 3: Look for any AMI ID near the end of the log (last occurrence)
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "" ]; then
+            AMI_ID=$(grep -oE 'ami-[a-z0-9]{17}' packer-build.log | tail -1 || echo "")
+          fi
+          
+          if [ -n "$AMI_ID" ] && [ "$AMI_ID" != "" ]; then
+            echo "ami_id=$AMI_ID" >> $GITHUB_OUTPUT
+            echo "✅ AMI ID extracted: $AMI_ID"
+          else
+            echo "⚠️ Warning: Could not extract AMI ID from build output"
+            echo "Build log tail (last 50 lines):"
+            tail -50 packer-build.log
+            echo ""
+            echo "Setting empty AMI ID - validation and copy jobs will be skipped"
+            echo "ami_id=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Output AMI ID and Debug
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "Build Job Debug Information"
+          echo "=========================================="
+          echo "Build step exit code: ${{ job.status }}"
+          echo "AMI ID from outputs: '${{ steps.build.outputs.ami_id }}'"
+          AMI_ID_VAR="${{ steps.build.outputs.ami_id }}"
+          echo "AMI ID length: ${#AMI_ID_VAR}"
+          echo "=========================================="
+          
+          if [ -n "${{ steps.build.outputs.ami_id }}" ] && [ "${{ steps.build.outputs.ami_id }}" != "" ]; then
+            echo "✅ AMI build completed successfully!"
+            echo "AMI ID: ${{ steps.build.outputs.ami_id }}"
+            echo "Check AWS EC2 Console for the latest AMI"
+          else
+            echo "⚠️ Warning: AMI ID not found in outputs"
+            echo "This may prevent validation and copy jobs from running"
+          fi
+
+      - name: Upload Packer build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packer-build-log
+          path: packer-build.log
+          retention-days: 7
+
+      - name: Generate CIS Compliance Summary
+        if: always()
+        run: |
+          echo "## 🔒 CIS Compliance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract compliance information from Packer build log
+          if grep -q "CIS Compliance Report" packer-build.log; then
+            # Extract compliance percentage
+            COMPLIANCE_PCT=$(grep -oP "Compliance: \K[0-9]+" packer-build.log | tail -1 || echo "N/A")
+            PASSED=$(grep -oP "Passed: \K[0-9]+" packer-build.log | tail -1 || echo "N/A")
+            TOTAL=$(grep -oP "Passed: [0-9]+/\K[0-9]+" packer-build.log | tail -1 || echo "N/A")
+            THRESHOLD=$(grep -oP "Threshold: \K[0-9]+" packer-build.log | tail -1 || echo "80")
+            
+            if [ "$COMPLIANCE_PCT" != "N/A" ]; then
+              # Determine status
+              if [ "$COMPLIANCE_PCT" -ge "$THRESHOLD" ]; then
+                STATUS_ICON="✅"
+                STATUS="PASS"
+              else
+                STATUS_ICON="❌"
+                STATUS="FAIL"
+              fi
+              
+              echo "### $STATUS_ICON Status: **$STATUS**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+              echo "| **Compliance** | **$COMPLIANCE_PCT%** |" >> $GITHUB_STEP_SUMMARY
+              echo "| Threshold | $THRESHOLD% |" >> $GITHUB_STEP_SUMMARY
+              echo "| Passed Checks | $PASSED / $TOTAL |" >> $GITHUB_STEP_SUMMARY
+              echo "| CIS Level | 2 |" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "> 📋 For detailed compliance information, check the Packer build logs." >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+  validate-ami:
+    name: Validate AMI
+    needs: build
+    runs-on: terraform
+    if: always() && needs.build.result == 'success' && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != '' && needs.build.outputs.ami_id != 'null'
+    permissions:
+      contents: read
+    steps:
+      - name: Debug - Check why job is running or not
+        run: |
+          echo "=========================================="
+          echo "Validate-AMI Job Debug"
+          echo "=========================================="
+          echo "Build job result: ${{ needs.build.result }}"
+          echo "AMI ID value: '${{ needs.build.outputs.ami_id }}'"
+          echo "AMI ID is null: ${{ needs.build.outputs.ami_id == null }}"
+          echo "AMI ID is empty: ${{ needs.build.outputs.ami_id == '' }}"
+          echo "=========================================="
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Verify AWS credentials are set
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ ERROR: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set as GitHub secrets"
+            exit 1
+          fi
+          echo "✅ AWS credentials configured"
+          # Test AWS credentials
+          aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
+
+      - name: Verify dependencies for validation
+        run: |
+          command -v jq >/dev/null 2>&1 || { echo "❌ ERROR: jq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ jq: $(jq --version)"
+          # Validation now uses bash scripts via SSM instead of Ansible
+
+      - name: Verify AWS CLI is installed
+        run: |
+          command -v aws >/dev/null 2>&1 || { echo "❌ ERROR: AWS CLI is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ AWS CLI: $(aws --version)"
+
+      - name: Wait for AMI to be available
+        run: |
+          AMI_ID="${{ needs.build.outputs.ami_id }}"
+          echo "Waiting for AMI $AMI_ID to be available..."
+          aws ec2 wait image-available \
+            --image-ids "$AMI_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --max-attempts 30 \
+            --delay 10 || echo "AMI may still be initializing"
+
+      - name: Verify yq is installed
+        run: |
+          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ yq: $(yq --version)"
+
+      - name: Read build configuration for validation
+        id: config-validation
+        run: |
+          CONFIG_FILE="config/build-config.yml"
+          VALIDATION_INSTANCE_TYPE=$(yq eval '.instance.validation_instance_type' "$CONFIG_FILE" || echo "t3.micro")
+          VALIDATION_CIS_LEVEL=$(yq eval '.cis.validation_level' "$CONFIG_FILE" || echo "2")
+          VALIDATION_CIS_THRESHOLD=$(yq eval '.cis.validation_threshold' "$CONFIG_FILE" || echo "80")
+          VALIDATION_FAIL_ON_FAILURE=$(yq eval '.cis.validation_fail_on_failure' "$CONFIG_FILE" || echo "false")
+          
+          # Get VPC configuration from environment or config
+          VPC_ID="${PKR_VAR_vpc_id:-$(yq eval '.vpc.vpc_id' "$CONFIG_FILE" || echo '')}"
+          SUBNET_ID="${PKR_VAR_subnet_id:-$(yq eval '.vpc.subnet_id' "$CONFIG_FILE" || echo '')}"
+          IAM_INSTANCE_PROFILE="${PKR_VAR_iam_instance_profile:-$(yq eval '.vpc.iam_instance_profile' "$CONFIG_FILE" || echo '')}"
+          SECURITY_GROUP_IDS="${SECURITY_GROUP_IDS:-$(yq eval '.vpc.security_group_ids[]' "$CONFIG_FILE" | tr '\n' ',' | sed 's/,$//' || echo '')}"
+          
+          echo "validation_instance_type=$VALIDATION_INSTANCE_TYPE" >> $GITHUB_OUTPUT
+          echo "validation_cis_level=$VALIDATION_CIS_LEVEL" >> $GITHUB_OUTPUT
+          echo "validation_cis_threshold=$VALIDATION_CIS_THRESHOLD" >> $GITHUB_OUTPUT
+          echo "validation_fail_on_failure=$VALIDATION_FAIL_ON_FAILURE" >> $GITHUB_OUTPUT
+          echo "validation_vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
+          echo "validation_subnet_id=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "validation_iam_instance_profile=$IAM_INSTANCE_PROFILE" >> $GITHUB_OUTPUT
+          echo "validation_security_group_ids=$SECURITY_GROUP_IDS" >> $GITHUB_OUTPUT
+
+      - name: Create security group for validation instance
+        id: create-sg
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          VPC_ID="${{ steps.config-validation.outputs.validation_vpc_id }}"
+          
+          if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "" ]; then
+            echo "⚠️  WARNING: VPC ID not set. Creating security group in default VPC."
+            VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text --region ${{ env.PKR_VAR_aws_region }})
+          fi
+          
+          SG_NAME="packer-validation-$(date +%s)"
+          SG_ID=$(aws ec2 create-security-group \
+            --group-name "$SG_NAME" \
+            --description "Temporary security group for AMI validation (SSM Session Manager)" \
+            --vpc-id "$VPC_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'GroupId' \
+            --output text)
+          
+          # SSM Session Manager uses HTTPS (port 443) - no inbound rules needed
+          # But we need outbound HTTPS for SSM agent to communicate
+          echo "Security group created: $SG_ID (SSM Session Manager - no inbound rules needed)"
+          
+          echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
+
+      - name: Launch test instance
+        id: launch-instance
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          AMI_ID="${{ needs.build.outputs.ami_id }}"
+          SG_ID="${{ steps.create-sg.outputs.sg_id }}"
+          INSTANCE_NAME="ami-validation-$(date +%Y%m%d-%H%M%S)"
+          INSTANCE_TYPE="${{ steps.config-validation.outputs.validation_instance_type || 't3.micro' }}"
+          VPC_ID="${{ steps.config-validation.outputs.validation_vpc_id }}"
+          SUBNET_ID="${{ steps.config-validation.outputs.validation_subnet_id }}"
+          IAM_INSTANCE_PROFILE="${{ steps.config-validation.outputs.validation_iam_instance_profile }}"
+          SECURITY_GROUP_IDS="${{ steps.config-validation.outputs.validation_security_group_ids }}"
+          
+          # Collect all security group IDs (validation SG + additional SGs)
+          # When using subnet, we must use security-group-ids (not group-name)
+          # Start with the validation security group
+          SG_IDS_LIST="$SG_ID"
+          if [ -n "$SECURITY_GROUP_IDS" ] && [ "$SECURITY_GROUP_IDS" != "" ]; then
+            # Convert comma-separated to space-separated (AWS CLI accepts space-separated IDs)
+            ADDITIONAL_SGS=$(echo "$SECURITY_GROUP_IDS" | tr ',' ' ')
+            SG_IDS_LIST="$SG_ID $ADDITIONAL_SGS"
+          fi
+          
+          # Build run-instances command array to avoid quote escaping issues
+          RUN_INSTANCES_ARGS=(
+            "run-instances"
+            "--image-id" "$AMI_ID"
+            "--instance-type" "$INSTANCE_TYPE"
+            "--security-group-ids"
+          )
+          # Split space-separated security group IDs into array elements
+          for sg_id in $SG_IDS_LIST; do
+            RUN_INSTANCES_ARGS+=("$sg_id")
+          done
+          
+          # Add subnet if provided (when using subnet, must use security-group-ids, not group-name)
+          if [ -n "$SUBNET_ID" ] && [ "$SUBNET_ID" != "" ]; then
+            RUN_INSTANCES_ARGS+=("--subnet-id" "$SUBNET_ID")
+          fi
+          
+          # Add IAM instance profile (required for SSM)
+          if [ -n "$IAM_INSTANCE_PROFILE" ] && [ "$IAM_INSTANCE_PROFILE" != "" ]; then
+            RUN_INSTANCES_ARGS+=("--iam-instance-profile" "Name=$IAM_INSTANCE_PROFILE")
+          else
+            echo "⚠️  WARNING: IAM instance profile not set. SSM Session Manager may not work."
+          fi
+          
+          # Add tags
+          RUN_INSTANCES_ARGS+=(
+            "--tag-specifications" "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Purpose,Value=AMI-Validation},{Key=Build,Value=${{ github.run_id }}}]"
+            "--region" "${{ env.PKR_VAR_aws_region }}"
+            "--query" "Instances[0].InstanceId"
+            "--output" "text"
+          )
+          
+          INSTANCE_ID=$(aws ec2 "${RUN_INSTANCES_ARGS[@]}")
+          
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Test instance launched: $INSTANCE_ID"
+          
+          # Wait for instance to be running
+          aws ec2 wait instance-running \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }}
+
+      - name: Wait for SSM agent to be ready
+        id: wait-ssm
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          INSTANCE_ID="${{ steps.launch-instance.outputs.instance_id }}"
+          echo "Waiting for SSM agent to be ready on $INSTANCE_ID..."
+          
+          RETRY=0
+          MAX_RETRIES=30
+          while [ $RETRY -lt $MAX_RETRIES ]; do
+            if aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} \
+              --query 'InstanceInformationList[0].PingStatus' \
+              --output text 2>/dev/null | grep -q "Online"; then
+              echo "SSM agent is ready!"
+              exit 0
+            fi
+            RETRY=$((RETRY + 1))
+            echo "Waiting for SSM agent... ($RETRY/$MAX_RETRIES)"
+            sleep 10
+          done
+          
+          echo "ERROR: SSM agent not ready after $MAX_RETRIES attempts"
+          echo "Checking instance status..."
+          aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'Reservations[0].Instances[0].[State.Name,IamInstanceProfile.Arn]' \
+            --output text
+          exit 1
+
+      - name: Run AMI validation tests
+        id: validate
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          INSTANCE_ID="${{ steps.launch-instance.outputs.instance_id }}"
+          
+          # Use config values for validation
+          VALIDATION_FAIL_ON_FAILURE="${{ steps.config-validation.outputs.validation_fail_on_failure || 'false' }}"
+          
+          # Run validation tests via SSM (using bash scripts instead of Ansible)
+          # This avoids Ansible SSM connection plugin complexity
+          
+          echo "=========================================="
+          echo "AMI Validation Started"
+          echo "Instance ID: $INSTANCE_ID"
+          echo "=========================================="
+          
+          # Read validation script and send via SSM
+          echo "Running validation tests via SSM..."
+          
+          # Read the validation script and create properly formatted JSON
+          # AWS SSM expects commands as an array of strings
+          # Use jq to properly escape the script content and create JSON array
+          cat scripts/validate-ami.sh | jq -Rs '{commands: [.]}' > /tmp/ssm-parameters.json
+          
+          # Send command using JSON file to avoid parameter parsing issues
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters file:///tmp/ssm-parameters.json \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --output json > /tmp/ssm-command.json
+          
+          COMMAND_ID=$(jq -r '.Command.CommandId' /tmp/ssm-command.json)
+          echo "SSM Command ID: $COMMAND_ID"
+          
+          # Wait for command to complete
+          echo "Waiting for validation to complete..."
+          for i in {1..30}; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} \
+              --query 'Status' \
+              --output text 2>/dev/null || echo "Pending")
+            
+            if [ "$STATUS" = "Success" ]; then
+              echo "✓ Validation completed successfully"
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "✗ Validation failed"
+              break
+            fi
+            
+            echo "Status: $STATUS (attempt $i/30)"
+            sleep 5
+          done
+          
+          # Get command output and status
+          echo ""
+          echo "=========================================="
+          echo "Validation Output"
+          echo "=========================================="
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'StandardOutputContent' \
+            --output text | tee validation-output.log
+          
+          # Check final status
+          FINAL_STATUS=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'Status' \
+            --output text)
+          
+          if [ "$FINAL_STATUS" = "Success" ]; then
+            echo "validation_exit_code=0" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "validation_exit_code=1" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Generate Validation Summary
+        if: always()
+        run: |
+          echo "## ✅ AMI Validation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f validation-output.log ]; then
+            # Extract validation results from bash script output
+            if grep -q "AMI Validation Summary" validation-output.log; then
+              echo "### Validation Results" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Extract status
+              FUNCTIONAL_STATUS=$(grep "Functional Tests:" validation-output.log | awk '{print $NF}' || echo "UNKNOWN")
+              SECURITY_STATUS=$(grep "Security Checks:" validation-output.log | awk '{print $NF}' || echo "UNKNOWN")
+              OVERALL_STATUS=$(grep "Overall Status:" validation-output.log | awk '{print $NF}' || echo "UNKNOWN")
+              
+              # Determine icon
+              if [ "$OVERALL_STATUS" = "PASS" ]; then
+                STATUS_ICON="✅"
+              else
+                STATUS_ICON="❌"
+              fi
+              
+              echo "### $STATUS_ICON Overall Status: **$OVERALL_STATUS**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Test Category | Status |" >> $GITHUB_STEP_SUMMARY
+              echo "|---------------|--------|" >> $GITHUB_STEP_SUMMARY
+              echo "| **Functional Tests** | $FUNCTIONAL_STATUS |" >> $GITHUB_STEP_SUMMARY
+              echo "| **Security Checks** | $SECURITY_STATUS |" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Show key test results
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>📋 View Detailed Test Results</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat validation-output.log >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ Could not find validation summary in logs." >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### Validation output:" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat validation-output.log >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "❌ validation-output.log file not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: |
+            validation-output.log
+            /tmp/validation-inventory.ini
+          retention-days: 30
+
+      - name: Cleanup - Terminate test instance
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          INSTANCE_ID="${{ steps.launch-instance.outputs.instance_id }}"
+          SG_ID="${{ steps.create-sg.outputs.sg_id }}"
+          
+          if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "" ]; then
+            echo "Terminating test instance: $INSTANCE_ID"
+            aws ec2 terminate-instances \
+              --instance-ids "$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} || true
+            
+            # Wait for instance to terminate
+            aws ec2 wait instance-terminated \
+              --instance-ids "$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} || true
+          fi
+          
+          if [ -n "$SG_ID" ] && [ "$SG_ID" != "" ]; then
+            echo "Deleting security group: $SG_ID"
+            # Wait a bit for instance termination to complete
+            sleep 5
+            aws ec2 delete-security-group \
+              --group-id "$SG_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} || true
+          fi
+
+      - name: Validation Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "AMI Validation Summary"
+          echo "=========================================="
+          echo "AMI ID: ${{ needs.build.outputs.ami_id }}"
+          echo "Validation Exit Code: ${{ steps.validate.outputs.validation_exit_code }}"
+          if [ "${{ steps.validate.outputs.validation_exit_code }}" = "0" ]; then
+            echo "Status: ✅ VALIDATION PASSED"
+          else
+            echo "Status: ❌ VALIDATION FAILED"
+          fi
+          echo "=========================================="
+
+  copy-ami:
+    name: Copy AMI to Target Regions
+    needs: [build, validate-ami]
+    runs-on: terraform
+    if: success() && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != '' && needs.build.outputs.ami_id != 'null'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          # Verify AWS credentials are set
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ ERROR: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set as GitHub secrets"
+            exit 1
+          fi
+          echo "✅ AWS credentials configured"
+          # Test AWS credentials
+          aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
+
+      - name: Verify required tools are installed
+        run: |
+          # Verify AWS CLI
+          command -v aws >/dev/null 2>&1 || { echo "❌ ERROR: AWS CLI is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ AWS CLI: $(aws --version)"
+          
+          # Verify jq
+          command -v jq >/dev/null 2>&1 || { echo "❌ ERROR: jq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ jq: $(jq --version)"
+          
+          # Verify pip3
+          command -v pip3 >/dev/null 2>&1 || { echo "❌ ERROR: pip3 is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ pip3: $(pip3 --version)"
+          
+          # Verify pyyaml
+          python3 -c "import yaml" >/dev/null 2>&1 || { echo "❌ ERROR: pyyaml is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ pyyaml: installed"
+
+      - name: Parse target regions from config or input
+        id: parse-regions
+        run: |
+          if [ -n "${{ env.TARGET_REGIONS }}" ] && [ "${{ env.TARGET_REGIONS }}" != "" ]; then
+            echo "Using target regions from workflow input: ${{ env.TARGET_REGIONS }}"
+            REGIONS_INPUT="${{ env.TARGET_REGIONS }}"
+          else
+            echo "Reading target regions from config file: config/build-config.yml"
+            
+            REGIONS_INPUT=$(python3 << 'EOF'
+          import yaml
+          import sys
+          import os
+          
+          config_file = 'config/build-config.yml'
+          
+          try:
+              if not os.path.exists(config_file):
+                  print("Warning: Config file 'config/build-config.yml' not found", file=sys.stderr)
+                  print("")
+                  sys.exit(0)
+              
+              with open(config_file, 'r') as f:
+                  config = yaml.safe_load(f)
+              
+              if not config:
+                  print("Warning: Config file exists but is empty", file=sys.stderr)
+                  print("")
+                  sys.exit(0)
+              
+              if 'distribution' in config and 'target_regions' in config['distribution']:
+                  regions = [r.strip() for r in config['distribution']['target_regions'] if r and r.strip()]
+                  if regions:
+                      print(','.join(regions))
+                      sys.exit(0)
+              
+              print("Warning: No target regions found in config file", file=sys.stderr)
+              print("")
+              sys.exit(0)
+          except Exception as e:
+              print(f"Error reading config: {e}", file=sys.stderr)
+              print("")
+              sys.exit(1)
+          EOF
+            )
+            
+            PYTHON_EXIT_CODE=$?
+            
+            if [ $PYTHON_EXIT_CODE -ne 0 ]; then
+              echo "❌ Error: Failed to read config/build-config.yml"
+              exit 1
+            fi
+            
+            if [ -z "$REGIONS_INPUT" ] || [ "$REGIONS_INPUT" = "" ]; then
+              echo "⚠️ No target regions configured in config/build-config.yml"
+              echo "AMI copy will be skipped."
+              echo "regions_json=[]" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "✅ Using target regions from config: $REGIONS_INPUT"
+            fi
+          fi
+          
+          if [ -z "$REGIONS_INPUT" ] || [ "$REGIONS_INPUT" = "" ]; then
+            echo "No target regions specified, skipping copy"
+            echo "regions_json=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          REGIONS_JSON=$(echo "$REGIONS_INPUT" | tr ',' '\n' | jq -R . | jq -sc .)
+          echo "regions_json=$REGIONS_JSON" >> $GITHUB_OUTPUT
+          echo "Target regions: $REGIONS_INPUT"
+
+      - name: Copy AMI to target regions
+        id: copy-ami
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          SOURCE_AMI_ID="${{ needs.build.outputs.ami_id }}"
+          SOURCE_REGION="${{ env.PKR_VAR_aws_region }}"
+          AMI_NAME=$(aws ec2 describe-images \
+            --image-ids "$SOURCE_AMI_ID" \
+            --region "$SOURCE_REGION" \
+            --query 'Images[0].Name' \
+            --output text)
+          
+          echo "Source AMI: $SOURCE_AMI_ID ($AMI_NAME) in $SOURCE_REGION"
+          
+          REGIONS=$(echo '${{ steps.parse-regions.outputs.regions_json }}' | jq -r '.[]')
+          
+          if [ -z "$REGIONS" ]; then
+            echo "No regions to copy to"
+            echo "copied_amis={}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          COPIED_AMIS_JSON="{}"
+          
+          for TARGET_REGION in $REGIONS; do
+            TARGET_REGION=$(echo "$TARGET_REGION" | tr -d '"' | xargs)
+            echo "=========================================="
+            echo "Copying AMI to $TARGET_REGION..."
+            echo "=========================================="
+            
+            COPIED_AMI_ID=$(aws ec2 copy-image \
+              --source-image-id "$SOURCE_AMI_ID" \
+              --source-region "$SOURCE_REGION" \
+              --region "$TARGET_REGION" \
+              --name "$AMI_NAME" \
+              --description "Copied from $SOURCE_REGION - $AMI_NAME" \
+              --query 'ImageId' \
+              --output text)
+            
+            if [ -n "$COPIED_AMI_ID" ] && [ "$COPIED_AMI_ID" != "None" ]; then
+              echo "✅ AMI copied successfully: $COPIED_AMI_ID"
+              
+              COPIED_AMIS_JSON=$(echo "$COPIED_AMIS_JSON" | jq -c --arg region "$TARGET_REGION" --arg ami "$COPIED_AMI_ID" '. + {($region): $ami}')
+              
+              aws ec2 create-tags \
+                --resources "$COPIED_AMI_ID" \
+                --region "$TARGET_REGION" \
+                --tags \
+                  Key=Name,Value="$AMI_NAME" \
+                  Key=SourceRegion,Value="$SOURCE_REGION" \
+                  Key=SourceAMI,Value="$SOURCE_AMI_ID" \
+                  Key=ManagedBy,Value="Packer" \
+                  Key=CopiedAt,Value="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
+            else
+              echo "❌ Failed to copy AMI to $TARGET_REGION"
+            fi
+          done
+          
+          COPIED_AMIS_JSON=$(echo "$COPIED_AMIS_JSON" | jq -c .)
+          echo "copied_amis=$COPIED_AMIS_JSON" >> $GITHUB_OUTPUT
+          
+          echo "=========================================="
+          echo "AMI Copy Summary"
+          echo "=========================================="
+          echo "$COPIED_AMIS_JSON" | jq -r 'to_entries[] | "\(.key): \(.value)"'
+          echo "=========================================="
+
+      - name: Verify yq is installed
+        run: |
+          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ yq: $(yq --version)"
+
+      - name: Read Parameter Store configuration
+        id: config-parameter-store
+        run: |
+          CONFIG_FILE="config/build-config.yml"
+          PARAMETER_STORE_ENABLED=$(yq eval '.parameter_store.enabled' "$CONFIG_FILE" || echo "true")
+          PARAMETER_STORE_BASE_PATH=$(yq eval '.parameter_store.base_path' "$CONFIG_FILE" || echo "/packer/amazonlinux2023-golden-image")
+          
+          echo "parameter_store_enabled=$PARAMETER_STORE_ENABLED" >> $GITHUB_OUTPUT
+          echo "parameter_store_base_path=$PARAMETER_STORE_BASE_PATH" >> $GITHUB_OUTPUT
+
+      - name: Store AMI IDs in Parameter Store
+        if: steps.config-parameter-store.outputs.parameter_store_enabled == 'true' && env.STORE_IN_PARAMETER_STORE == 'true' && steps.copy-ami.outputs.copied_amis != '{}'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ env.PKR_VAR_aws_region }}
+        run: |
+          SOURCE_AMI_ID="${{ needs.build.outputs.ami_id }}"
+          SOURCE_REGION="${{ env.PKR_VAR_aws_region }}"
+          AMI_NAME=$(aws ec2 describe-images \
+            --image-ids "$SOURCE_AMI_ID" \
+            --region "$SOURCE_REGION" \
+            --query 'Images[0].Name' \
+            --output text)
+          
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          PARAMETER_BASE="${{ steps.config-parameter-store.outputs.parameter_store_base_path || '/packer/amazonlinux2023-golden-image' }}"
+          
+          echo "=========================================="
+          echo "Storing AMI IDs in Parameter Store"
+          echo "=========================================="
+          
+          # Store source AMI
+          aws ssm put-parameter \
+            --name "$PARAMETER_BASE/$SOURCE_REGION/latest" \
+            --value "$SOURCE_AMI_ID" \
+            --type "String" \
+            --description "Latest Amazon Linux 2023 Golden Image AMI ID in $SOURCE_REGION (Built: $BUILD_DATE)" \
+            --overwrite \
+            --region "$SOURCE_REGION" || true
+          
+          aws ssm put-parameter \
+            --name "$PARAMETER_BASE/$SOURCE_REGION/$AMI_NAME" \
+            --value "$SOURCE_AMI_ID" \
+            --type "String" \
+            --description "Amazon Linux 2023 Golden Image AMI ID: $AMI_NAME in $SOURCE_REGION" \
+            --overwrite \
+            --region "$SOURCE_REGION" || true
+          
+          echo "✅ Stored source AMI: $SOURCE_AMI_ID in $SOURCE_REGION"
+          
+          # Store copied AMIs
+          COPIED_AMIS_JSON='${{ steps.copy-ami.outputs.copied_amis }}'
+          
+          if [ "$COPIED_AMIS_JSON" != "{}" ] && [ -n "$COPIED_AMIS_JSON" ]; then
+            echo "$COPIED_AMIS_JSON" | jq -r 'to_entries[] | "\(.key)|\(.value)"' | while IFS='|' read -r REGION AMI_ID; do
+              aws ssm put-parameter \
+                --name "$PARAMETER_BASE/$REGION/latest" \
+                --value "$AMI_ID" \
+                --type "String" \
+                --description "Latest Amazon Linux 2023 Golden Image AMI ID in $REGION (Copied: $BUILD_DATE)" \
+                --overwrite \
+                --region "$REGION" || true
+              
+              aws ssm put-parameter \
+                --name "$PARAMETER_BASE/$REGION/$AMI_NAME" \
+                --value "$AMI_ID" \
+                --type "String" \
+                --description "Amazon Linux 2023 Golden Image AMI ID: $AMI_NAME in $REGION (Copied from $SOURCE_REGION)" \
+                --overwrite \
+                --region "$REGION" || true
+              
+              echo "✅ Stored copied AMI: $AMI_ID in $REGION"
+            done
+          fi
+          
+          echo "=========================================="
+          echo "Parameter Store Update Complete"
+          echo "=========================================="
+
+      - name: Copy AMI Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "AMI Distribution Summary"
+          echo "=========================================="
+          echo "Source AMI: ${{ needs.build.outputs.ami_id }} (${{ env.PKR_VAR_aws_region }})"
+          echo "Target Regions: ${{ env.TARGET_REGIONS }}"
+          echo "Parameter Store: ${{ env.STORE_IN_PARAMETER_STORE }}"
+          echo ""
+          echo "Copied AMIs:"
+          echo '${{ steps.copy-ami.outputs.copied_amis }}' | jq -r 'to_entries[] | "  \(.key): \(.value)"' || echo "  None"
+          echo ""
+          echo "Parameter Store Paths:"
+          echo "  /packer/amazonlinux2023-golden-image/<region>/latest"
+          echo "  /packer/amazonlinux2023-golden-image/<region>/<ami-name>"
+          echo "=========================================="
+
