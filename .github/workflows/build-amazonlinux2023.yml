@@ -23,7 +23,7 @@ on:
           - 'false'
   push:
     branches:
-      - amazonlinux2023-vpc-private-subnet
+      - self-hosted
     paths:
       - 'amazonlinux2023-golden-image.pkr.hcl'
       - 'ansible/**'
@@ -31,7 +31,7 @@ on:
       - '.github/workflows/build-amazonlinux2023.yml'
   pull_request:
     branches:
-      - amazonlinux2023-vpc-private-subnet
+      - self-hosted
 
 env:
   PKR_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
@@ -52,7 +52,7 @@ env:
 jobs:
   validate:
     name: Validate Packer Template
-    runs-on: ubuntu-latest
+    runs-on: terraform
     permissions:
       contents: read
     steps:
@@ -124,7 +124,7 @@ jobs:
   build:
     name: Build AMI
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: terraform
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/amazonlinux2023-vpc-private-subnet')
     permissions:
       contents: read
@@ -434,7 +434,7 @@ jobs:
   validate-ami:
     name: Validate AMI
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: terraform
     if: always() && needs.build.result == 'success' && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != '' && needs.build.outputs.ami_id != 'null'
     permissions:
       contents: read
@@ -861,7 +861,7 @@ jobs:
   copy-ami:
     name: Copy AMI to Target Regions
     needs: [build, validate-ami]
-    runs-on: ubuntu-latest
+    runs-on: terraform
     if: success() && needs.build.outputs.ami_id != null && needs.build.outputs.ami_id != '' && needs.build.outputs.ami_id != 'null'
     permissions:
       contents: read
