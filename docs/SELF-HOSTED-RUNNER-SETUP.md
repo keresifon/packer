@@ -15,6 +15,7 @@ Pre-installing dependencies on the self-hosted runner:
 - RHEL 9.6 system with sudo access
 - Internet connectivity for downloading packages
 - Root or sudo privileges for installation
+- **IMPORTANT:** Know which user runs your GitHub Actions runner (typically `github-runner`, `runner`, or check with `ps aux | grep actions-runner`)
 
 ## Required Tools
 
@@ -100,23 +101,50 @@ yq (https://github.com/mikefarah/yq) version v4.x.x
 
 ### Step 5: Install Ansible
 
+**IMPORTANT:** Install Ansible as the same user that runs the GitHub Actions runner (typically `github-runner` or `runner`). If you install it as a different user, it won't be in the PATH.
+
 ```bash
-# Install Ansible via pip
+# Option 1: Install as the runner user (RECOMMENDED)
+# Switch to the runner user first
+sudo su - github-runner  # or whatever user runs the runner
+
+# Install Ansible via pip (will install to ~/.local/bin)
 pip3 install ansible
 
 # Verify installation
 ansible --version
+
+# Exit back to your user
+exit
+
+# Option 2: Install system-wide (requires sudo, accessible to all users)
+sudo pip3 install ansible
+
+# Option 3: Install to a specific location in PATH
+# Create the directory if it doesn't exist
+sudo mkdir -p /usr/local/bin
+
+# Install Ansible
+sudo pip3 install ansible
+
+# Verify it's in PATH
+which ansible
 ```
 
 **Expected output:**
 ```
 ansible [core 2.x.x]
   config file = None
-  configured module search path = ['/home/user/.ansible/plugins/modules', '/usr/share/ansible/plugins/modules']
-  ansible python module location = /usr/local/lib/python3.x/site-packages/ansible
-  executable location = /usr/local/bin/ansible
+  configured module search path = ['/home/github-runner/.ansible/plugins/modules', '/usr/share/ansible/plugins/modules']
+  ansible python module location = /home/github-runner/.local/lib/python3.x/site-packages/ansible
+  executable location = /home/github-runner/.local/bin/ansible  # or /usr/local/bin/ansible
   python version = 3.x.x
 ```
+
+**Note:** The executable location should be in one of these PATH directories:
+- `/home/github-runner/.local/bin` (user-specific, if installed as runner user)
+- `/usr/local/bin` (system-wide, if installed with sudo)
+- `/usr/bin` (system-wide, if installed via package manager)
 
 ### Step 6: Install Python Packages
 
