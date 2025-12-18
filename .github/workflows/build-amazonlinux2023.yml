@@ -59,11 +59,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install yq for config parsing
+      - name: Verify yq is installed
         run: |
-          wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          chmod +x /usr/local/bin/yq
-          yq --version
+          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ yq: $(yq --version)"
 
       - name: Setup Packer
         uses: hashicorp/setup-packer@main
@@ -134,11 +133,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install yq for config parsing
+      - name: Verify yq is installed
         run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          yq --version
+          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ yq: $(yq --version)"
 
       - name: Read build configuration
         id: config
@@ -204,11 +202,10 @@ jobs:
           # Test AWS credentials
           aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
-      - name: Install Ansible
+      - name: Verify Ansible is installed
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install ansible
+          command -v ansible >/dev/null 2>&1 || { echo "❌ ERROR: Ansible is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ Ansible: $(ansible --version | head -1)"
 
       - name: Initialize Packer
         env:
@@ -469,20 +466,16 @@ jobs:
           # Test AWS credentials
           aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
-      - name: Install dependencies for validation
+      - name: Verify dependencies for validation
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
+          command -v jq >/dev/null 2>&1 || { echo "❌ ERROR: jq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ jq: $(jq --version)"
           # Validation now uses bash scripts via SSM instead of Ansible
 
-      - name: Verify AWS CLI is available
+      - name: Verify AWS CLI is installed
         run: |
-          aws --version || (echo "AWS CLI not found, installing..." && \
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-            unzip -q awscliv2.zip && \
-            sudo ./aws/install --update && \
-            rm -rf aws awscliv2.zip)
-          aws --version
+          command -v aws >/dev/null 2>&1 || { echo "❌ ERROR: AWS CLI is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ AWS CLI: $(aws --version)"
 
       - name: Wait for AMI to be available
         run: |
@@ -494,11 +487,10 @@ jobs:
             --max-attempts 30 \
             --delay 10 || echo "AMI may still be initializing"
 
-      - name: Install yq for config parsing
+      - name: Verify yq is installed
         run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          yq --version
+          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ yq: $(yq --version)"
 
       - name: Read build configuration for validation
         id: config-validation
@@ -885,18 +877,23 @@ jobs:
           # Test AWS credentials
           aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
-      - name: Verify AWS CLI and install dependencies
+      - name: Verify required tools are installed
         run: |
-          aws --version || (echo "AWS CLI not found, installing..." && \
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-            unzip -q awscliv2.zip && \
-            sudo ./aws/install --update && \
-            rm -rf aws awscliv2.zip)
-          aws --version
+          # Verify AWS CLI
+          command -v aws >/dev/null 2>&1 || { echo "❌ ERROR: AWS CLI is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ AWS CLI: $(aws --version)"
           
-          sudo apt-get update
-          sudo apt-get install -y jq python3-pip
-          pip3 install pyyaml
+          # Verify jq
+          command -v jq >/dev/null 2>&1 || { echo "❌ ERROR: jq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ jq: $(jq --version)"
+          
+          # Verify pip3
+          command -v pip3 >/dev/null 2>&1 || { echo "❌ ERROR: pip3 is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ pip3: $(pip3 --version)"
+          
+          # Verify pyyaml
+          python3 -c "import yaml" >/dev/null 2>&1 || { echo "❌ ERROR: pyyaml is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ pyyaml: installed"
 
       - name: Parse target regions from config or input
         id: parse-regions
@@ -1042,11 +1039,10 @@ jobs:
           echo "$COPIED_AMIS_JSON" | jq -r 'to_entries[] | "\(.key): \(.value)"'
           echo "=========================================="
 
-      - name: Install yq for config parsing
+      - name: Verify yq is installed
         run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          yq --version
+          command -v yq >/dev/null 2>&1 || { echo "❌ ERROR: yq is not installed. Please install it on the runner."; exit 1; }
+          echo "✅ yq: $(yq --version)"
 
       - name: Read Parameter Store configuration
         id: config-parameter-store
