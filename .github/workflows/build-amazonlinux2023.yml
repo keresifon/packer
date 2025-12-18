@@ -469,15 +469,11 @@ jobs:
           # Test AWS credentials
           aws sts get-caller-identity || (echo "❌ ERROR: Failed to authenticate with AWS" && exit 1)
 
-      - name: Install Ansible and SSM plugin
+      - name: Install dependencies for validation
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install ansible
-          pip3 install boto3 botocore
-          # Install AWS collections for SSM connection plugin
-          ansible-galaxy collection install community.aws amazon.aws
-          ansible --version
+          sudo apt-get install -y jq
+          # Validation now uses bash scripts via SSM instead of Ansible
 
       - name: Verify AWS CLI is available
         run: |
@@ -676,56 +672,77 @@ jobs:
           # Use config values for validation
           VALIDATION_FAIL_ON_FAILURE="${{ steps.config-validation.outputs.validation_fail_on_failure || 'false' }}"
           
-          # Create Ansible inventory file for SSM
-          # Use aws_ssm connection plugin from community.aws collection
-          cat > /tmp/validation-inventory.ini << EOF
-          [validation]
-          $INSTANCE_ID ansible_connection=aws_ssm ansible_aws_ssm_bucket_name= ansible_aws_ssm_region=${{ env.PKR_VAR_aws_region }}
-          EOF
+          # Run validation tests via SSM (using bash scripts instead of Ansible)
+          # This avoids Ansible SSM connection plugin complexity
           
-          # Create ansible.cfg to configure SSM connection
-          cat > ansible.cfg << EOF
-          [defaults]
-          host_key_checking = False
-          inventory = /tmp/validation-inventory.ini
-          deprecation_warnings = False
-          interpreter_python = auto_silent
+          echo "=========================================="
+          echo "AMI Validation Started"
+          echo "Instance ID: $INSTANCE_ID"
+          echo "=========================================="
           
-          [inventory]
-          enable_plugins = host_list, ini
+          # Read validation script and send via SSM
+          echo "Running validation tests via SSM..."
+          VALIDATION_SCRIPT=$(cat scripts/validate-ami.sh)
           
-          [connection]
-          pipelining = False
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands="$VALIDATION_SCRIPT" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --output json > /tmp/ssm-command.json
           
-          [ssh_connection]
-          ssh_args = -o ControlMaster=auto -o ControlPersist=60s
-          EOF
+          COMMAND_ID=$(jq -r '.Command.CommandId' /tmp/ssm-command.json)
+          echo "SSM Command ID: $COMMAND_ID"
           
-          # Set environment variables for AWS credentials (required for SSM connection)
-          export AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
-          export AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
-          export AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN"
-          export AWS_DEFAULT_REGION="${{ env.PKR_VAR_aws_region }}"
+          # Wait for command to complete
+          echo "Waiting for validation to complete..."
+          for i in {1..30}; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --region ${{ env.PKR_VAR_aws_region }} \
+              --query 'Status' \
+              --output text 2>/dev/null || echo "Pending")
+            
+            if [ "$STATUS" = "Success" ]; then
+              echo "✓ Validation completed successfully"
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "✗ Validation failed"
+              break
+            fi
+            
+            echo "Status: $STATUS (attempt $i/30)"
+            sleep 5
+          done
           
-          # Run validation playbook using SSM
-          # The aws_ssm connection plugin uses AWS credentials from environment
-          # Capture both stdout and stderr (Ansible debug messages go to stderr)
+          # Get command output and status
+          echo ""
+          echo "=========================================="
+          echo "Validation Output"
+          echo "=========================================="
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'StandardOutputContent' \
+            --output text | tee validation-output.log
           
-          # Debug: Check SSM connectivity first
-          echo "Testing SSM connectivity to instance $INSTANCE_ID..."
-          aws ssm describe-instance-information \
-            --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
-            --region ${{ env.PKR_VAR_aws_region }} || echo "Warning: SSM describe failed"
+          # Check final status
+          FINAL_STATUS=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region ${{ env.PKR_VAR_aws_region }} \
+            --query 'Status' \
+            --output text)
           
-          # Run playbook with increased verbosity for debugging
-          ansible-playbook \
-            -i /tmp/validation-inventory.ini \
-            ansible/ami-validation-playbook.yml \
-            -e "fail_on_validation_failure=$VALIDATION_FAIL_ON_FAILURE" \
-            -vvv 2>&1 | tee validation-output.log
-          
-          VALIDATION_EXIT=$?
-          echo "validation_exit_code=$VALIDATION_EXIT" >> $GITHUB_OUTPUT
+          if [ "$FINAL_STATUS" = "Success" ]; then
+            echo "validation_exit_code=0" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "validation_exit_code=1" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
       - name: Generate Validation Summary
         if: always()
@@ -734,28 +751,45 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f validation-output.log ]; then
-            # Extract validation results
+            # Extract validation results from bash script output
             if grep -q "AMI Validation Summary" validation-output.log; then
-              echo "### Validation Status" >> $GITHUB_STEP_SUMMARY
+              echo "### Validation Results" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
               
-              # Extract functional tests status
-              FUNCTIONAL_STATUS=$(grep -oP "Functional Tests:\s*\K[A-Z]+" validation-output.log | tail -1 || echo "UNKNOWN")
-              SECURITY_STATUS=$(grep -oP "Security Checks:\s*\K[A-Z]+" validation-output.log | tail -1 || echo "UNKNOWN")
-              OVERALL_STATUS=$(grep -oP "Overall Status:\s*\K[A-Z]+" validation-output.log | tail -1 || echo "UNKNOWN")
+              # Extract status
+              FUNCTIONAL_STATUS=$(grep "Functional Tests:" validation-output.log | awk '{print $NF}' || echo "UNKNOWN")
+              SECURITY_STATUS=$(grep "Security Checks:" validation-output.log | awk '{print $NF}' || echo "UNKNOWN")
+              OVERALL_STATUS=$(grep "Overall Status:" validation-output.log | awk '{print $NF}' || echo "UNKNOWN")
               
+              # Determine icon
+              if [ "$OVERALL_STATUS" = "PASS" ]; then
+                STATUS_ICON="✅"
+              else
+                STATUS_ICON="❌"
+              fi
+              
+              echo "### $STATUS_ICON Overall Status: **$OVERALL_STATUS**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
               echo "| Test Category | Status |" >> $GITHUB_STEP_SUMMARY
               echo "|---------------|--------|" >> $GITHUB_STEP_SUMMARY
-              echo "| **Functional Tests** | **$FUNCTIONAL_STATUS** |" >> $GITHUB_STEP_SUMMARY
-              echo "| **Security Checks** | **$SECURITY_STATUS** |" >> $GITHUB_STEP_SUMMARY
-              echo "| **Overall Status** | **$OVERALL_STATUS** |" >> $GITHUB_STEP_SUMMARY
+              echo "| **Functional Tests** | $FUNCTIONAL_STATUS |" >> $GITHUB_STEP_SUMMARY
+              echo "| **Security Checks** | $SECURITY_STATUS |" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Show key test results
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>📋 View Detailed Test Results</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat validation-output.log >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
             else
               echo "⚠️ Could not find validation summary in logs." >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
-              echo "### Last 20 lines of validation log:" >> $GITHUB_STEP_SUMMARY
+              echo "### Validation output:" >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
-              tail -20 validation-output.log >> $GITHUB_STEP_SUMMARY
+              cat validation-output.log >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
             fi
           else
