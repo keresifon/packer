@@ -14,30 +14,36 @@
     fail_on_validation_failure: false
 
   tasks:
-    - name: Gather basic system information
-      shell: |
-        hostname
-        cat /etc/os-release | grep '^NAME=' | cut -d'=' -f2 | tr -d '"' || echo 'Unknown'
-        cat /etc/os-release | grep '^VERSION_ID=' | cut -d'=' -f2 | tr -d '"' || echo 'Unknown'
-        uname -r
-      register: system_info
+    - name: Get hostname
+      command: hostname
+      register: hostname_result
       changed_when: false
       failed_when: false
 
-    - name: Set system facts from gathered info
-      set_fact:
-        ansible_hostname: "{{ system_info.stdout_lines[0] | default('unknown') }}"
-        ansible_distribution: "{{ system_info.stdout_lines[1] | default('Unknown') }}"
-        ansible_distribution_version: "{{ system_info.stdout_lines[2] | default('Unknown') }}"
-        ansible_kernel: "{{ system_info.stdout_lines[3] | default('unknown') }}"
-      when: system_info.stdout_lines is defined and system_info.stdout_lines | length >= 4
+    - name: Get OS name
+      shell: cat /etc/os-release | grep '^NAME=' | cut -d'=' -f2 | tr -d '"'
+      register: os_name_result
+      changed_when: false
+      failed_when: false
 
-    - name: Set default system facts if gathering failed
+    - name: Get OS version
+      shell: cat /etc/os-release | grep '^VERSION_ID=' | cut -d'=' -f2 | tr -d '"'
+      register: os_version_result
+      changed_when: false
+      failed_when: false
+
+    - name: Get kernel version
+      command: uname -r
+      register: kernel_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set system facts
       set_fact:
-        ansible_hostname: "{{ ansible_hostname | default('unknown') }}"
-        ansible_distribution: "{{ ansible_distribution | default('Unknown') }}"
-        ansible_distribution_version: "{{ ansible_distribution_version | default('Unknown') }}"
-        ansible_kernel: "{{ ansible_kernel | default('unknown') }}"
+        ansible_hostname: "{{ hostname_result.stdout | default('unknown') }}"
+        ansible_distribution: "{{ os_name_result.stdout | default('Unknown') }}"
+        ansible_distribution_version: "{{ os_version_result.stdout | default('Unknown') }}"
+        ansible_kernel: "{{ kernel_result.stdout | default('unknown') }}"
 
     - name: Display validation start message
       debug:
