@@ -57,7 +57,11 @@ jobs:
       contents: read
     steps:
       - name: Set up PATH for user-installed tools
-        run: echo "$HOME/.local/bin:$PATH" >> $GITHUB_PATH
+        run: |
+          echo "Current PATH: $PATH"
+          echo "Adding $HOME/.local/bin to PATH"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "Updated PATH will include: $HOME/.local/bin"
         shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
@@ -134,7 +138,11 @@ jobs:
       ami_id: ${{ steps.build.outputs.ami_id }}
     steps:
       - name: Set up PATH for user-installed tools
-        run: echo "$HOME/.local/bin:$PATH" >> $GITHUB_PATH
+        run: |
+          echo "Current PATH: $PATH"
+          echo "Adding $HOME/.local/bin to PATH"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "Updated PATH will include: $HOME/.local/bin"
         shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
@@ -210,7 +218,19 @@ jobs:
 
       - name: Verify Ansible is installed
         run: |
-          command -v ansible >/dev/null 2>&1 || { echo "❌ ERROR: Ansible is not installed. Please install it on the runner."; exit 1; }
+          echo "Current PATH: $PATH"
+          echo "Checking for ansible..."
+          if [ -f "$HOME/.local/bin/ansible" ]; then
+            echo "Found ansible at: $HOME/.local/bin/ansible"
+            export PATH="$HOME/.local/bin:$PATH"
+          fi
+          command -v ansible >/dev/null 2>&1 || { 
+            echo "❌ ERROR: Ansible is not installed. Please install it on the runner."
+            echo "Checked PATH: $PATH"
+            echo "Checked location: $HOME/.local/bin/ansible"
+            ls -la "$HOME/.local/bin/" 2>/dev/null || echo "Directory $HOME/.local/bin/ does not exist"
+            exit 1
+          }
           echo "✅ Ansible: $(ansible --version | head -1)"
 
       - name: Initialize Packer
