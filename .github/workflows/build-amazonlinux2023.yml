@@ -682,12 +682,17 @@ jobs:
           
           # Read validation script and send via SSM
           echo "Running validation tests via SSM..."
-          VALIDATION_SCRIPT=$(cat scripts/validate-ami.sh)
           
+          # Read the validation script and create properly formatted JSON
+          # AWS SSM expects commands as an array of strings
+          # Use jq to properly escape the script content and create JSON array
+          cat scripts/validate-ami.sh | jq -Rs '{commands: [.]}' > /tmp/ssm-parameters.json
+          
+          # Send command using JSON file to avoid parameter parsing issues
           aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --parameters commands="$VALIDATION_SCRIPT" \
+            --parameters file:///tmp/ssm-parameters.json \
             --region ${{ env.PKR_VAR_aws_region }} \
             --output json > /tmp/ssm-command.json
           
