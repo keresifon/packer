@@ -49,7 +49,7 @@ env:
 jobs:
   terraform:
     name: Terraform ${{ github.event.inputs.terraform_action || 'plan' }}
-    runs-on: terraform
+    runs-on: self-hosted
     permissions:
       contents: read
     steps:
