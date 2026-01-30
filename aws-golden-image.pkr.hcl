@@ -49,22 +49,46 @@ variable "security_group_ids" {
   default     = []
 }
 
-data "amazon-ami" "amazonlinux2023" {
+variable "source_ami_id" {
+  type        = string
+  description = "Specific AMI ID to use as source (overrides SSM parameter lookup)"
+  default     = ""
+}
+
+# Use AWS Systems Manager Parameter Store to get the latest official AL2023 AMI (optional)
+# Using data source as primary due to potential minimal AMI issues with SSM parameter
+data "amazon-parameterstore" "amazonlinux2023" {
+  name   = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+  region = var.aws_region
+}
+
+# Fallback: Use specific AMI filter to ensure we get full AL2023 with proper repo config
+# Avoiding minimal variants that may have incomplete package repository setup
+data "amazon-ami" "amazonlinux2023_fallback" {
   filters = {
-    name                = "al2023-ami-*-x86_64"
+    # Match only full AL2023 images with kernel version (not minimal)
+    name                = "al2023-ami-2023.*-kernel-6.*-x86_64"
     root-device-type    = "ebs"
     virtualization-type = "hvm"
+    architecture        = "x86_64"
   }
   most_recent = true
-  owners      = ["amazon"]
+  owners      = ["137112412989"]  # Amazon's official owner ID
   region      = var.aws_region
+}
+
+# Determine which AMI to use (priority: manual override > data source > SSM parameter)
+# Using data source as primary since SSM parameter may return minimal AMIs without proper repo config
+locals {
+  source_ami = var.source_ami_id != "" ? var.source_ami_id : data.amazon-ami.amazonlinux2023_fallback.id
 }
 
 source "amazon-ebs" "amazonlinux2023" {
   ami_name      = "${var.image_name}-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
   instance_type = var.instance_type
   region        = var.aws_region
-  source_ami    = data.amazon-ami.amazonlinux2023.id
+  source_ami    = local.source_ami
+
   
   communicator = "ssh"
   ssh_username = "ec2-user"
