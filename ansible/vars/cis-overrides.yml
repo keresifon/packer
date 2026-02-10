@@ -1,0 +1,21 @@
+---
+# CIS Level 2 Hardening - Variable Overrides
+# These override the defaults from ansible-lockdown/AMAZON2023-CIS
+# See the role's defaults/main.yml for all available options:
+# https://github.com/ansible-lockdown/AMAZON2023-CIS/blob/main/defaults/main.yml
+
+# Enable CIS Level 1 and Level 2
+amzn2023cis_level1: true
+amzn2023cis_level2: true
+
+# SSH - ensure ec2-user is allowed (required for Packer/SSM connectivity)
+amzn2023cis_sshd_allow_users: "ec2-user"
+
+# Disable audit during hardening (separate assessment job handles this)
+run_audit: false
+setup_audit: false
+
+# Skip controls that may interfere with Packer build connectivity
+# Uncomment any rules below to disable them if they cause build issues
+# amzn2023cis_rule_5_2_4: false   # SSH AllowUsers (we set it above)
+# amzn2023cis_rule_3_3_4: false   # firewalld (may block connectivity)

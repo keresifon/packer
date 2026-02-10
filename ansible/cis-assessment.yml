@@ -1,0 +1,81 @@
+---
+# CIS Compliance Assessment Playbook for Amazon Linux 2023
+# Runs against a test instance launched from the built AMI
+# Uses ansible-lockdown/AMAZON2023-CIS with audit enabled
+
+- name: CIS Compliance Assessment
+  hosts: all
+  become: true
+
+  vars_files:
+    - vars/cis-overrides.yml
+
+  vars:
+    # Override: enable audit for assessment
+    run_audit: true
+    setup_audit: true
+    # Assessment output directory
+    assessment_output_dir: /var/log/cis-assessment
+
+  pre_tasks:
+    - name: Display assessment configuration
+      ansible.builtin.debug:
+        msg:
+          - "Running CIS compliance assessment"
+          - "Audit enabled: {{ run_audit }}"
+          - "Output directory: {{ assessment_output_dir }}"
+
+    - name: Create assessment output directory
+      ansible.builtin.file:
+        path: "{{ assessment_output_dir }}"
+        state: directory
+        mode: "0755"
+
+  roles:
+    - role: AMAZON2023_CIS
+
+  post_tasks:
+    - name: Collect assessment results
+      ansible.builtin.find:
+        paths:
+          - /var/tmp
+          - "{{ assessment_output_dir }}"
+        patterns:
+          - "*.json"
+          - "*.html"
+          - "*.xml"
+          - "goss*"
+        recurse: true
+      register: assessment_files
+
+    - name: Display assessment file locations
+      ansible.builtin.debug:
+        msg: "Assessment file: {{ item.path }} ({{ item.size }} bytes)"
+      loop: "{{ assessment_files.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Read goss audit results
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ assessment_files.files | selectattr('path', 'search', 'goss') | list }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: audit_results
+      failed_when: false
+
+    - name: Display audit summary
+      ansible.builtin.debug:
+        msg: "{{ item.content | b64decode }}"
+      loop: "{{ audit_results.results | default([]) }}"
+      loop_control:
+        label: "audit result"
+      when:
+        - audit_results.results is defined
+        - item.content is defined
+
+    - name: Assessment complete
+      ansible.builtin.debug:
+        msg:
+          - "CIS compliance assessment complete"
+          - "Review results in {{ assessment_output_dir }} and /var/tmp on the instance"

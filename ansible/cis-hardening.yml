@@ -1,0 +1,31 @@
+---
+# CIS Level 2 Hardening Playbook for Amazon Linux 2023
+# Used by Packer to harden the AMI during build
+# Role: ansible-lockdown/AMAZON2023-CIS
+
+- name: CIS Level 2 Hardening for Amazon Linux 2023
+  hosts: all
+  become: true
+
+  vars_files:
+    - vars/cis-overrides.yml
+
+  pre_tasks:
+    - name: Display hardening configuration
+      ansible.builtin.debug:
+        msg:
+          - "CIS Hardening enabled: {{ enable_cis_hardening | default(true) }}"
+          - "CIS Level 1: {{ amzn2023cis_level1 | default(true) }}"
+          - "CIS Level 2: {{ amzn2023cis_level2 | default(true) }}"
+
+    - name: Skip hardening if disabled
+      ansible.builtin.meta: end_play
+      when: not (enable_cis_hardening | default(true) | bool)
+
+  roles:
+    - role: AMAZON2023_CIS
+
+  post_tasks:
+    - name: CIS hardening complete
+      ansible.builtin.debug:
+        msg: "CIS Level 2 hardening applied successfully"

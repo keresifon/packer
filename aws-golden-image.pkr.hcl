@@ -214,181 +214,26 @@ build {
     ]
   }
 
-  # Provisioning: Copy CIS Hardening Script
-  # Copy the hardening script to the instance first using file provisioner
-  provisioner "file" {
-    source      = "scripts/cis/cis-level2-hardening.sh"
-    destination = "/tmp/cis-level2-hardening.sh"
-  }
-
-  # Provisioning: Apply CIS Level 2 Hardening (Background Process)
-  # Launch hardening script in background to avoid Packer script deletion issues
-  # The wrapper script exits immediately, so Packer doesn't have a long-running script to manage
-  provisioner "shell" {
-    environment_vars = [
-      "ENABLE_CIS_HARDENING=${var.enable_cis_hardening}",
-      "CIS_S3_BUCKET=${var.cis_s3_bucket}",
-      "CIS_S3_PREFIX=${var.cis_s3_prefix}",
-      "AWS_REGION=${var.aws_region}"
+  # Provisioning: CIS Level 2 Hardening with Ansible
+  # Uses ansible-lockdown/AMAZON2023-CIS role for automated, maintained CIS compliance
+  # Role is installed via galaxy_file, playbook handles enable/disable logic
+  provisioner "ansible" {
+    playbook_file = "ansible/cis-hardening.yml"
+    galaxy_file   = "ansible/requirements.yml"
+    user          = "ec2-user"
+    use_proxy     = true
+    extra_arguments = [
+      "-e", "enable_cis_hardening=${var.enable_cis_hardening}"
     ]
-    inline = [
-      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
-      "if [ \"${var.enable_cis_hardening}\" != \"true\" ]; then",
-      "  echo '⚠️  CIS hardening is disabled, skipping'",
-      "  exit 0",
-      "fi",
-      "# Copy hardening script to permanent location",
-      "$${SUDO} mkdir -p /opt/cis",
-      "$${SUDO} cp /tmp/cis-level2-hardening.sh /opt/cis/cis-level2-hardening.sh",
-      "$${SUDO} chmod +x /opt/cis/cis-level2-hardening.sh",
-      "# Initialize status files",
-      "rm -f /tmp/cis-hardening.complete /tmp/cis-hardening.failed",
-      "echo 'starting' > /tmp/cis-hardening.status",
-      "# Launch hardening script in background with nohup (as root via sudo)",
-      "# Export environment variables and use sh -c to properly capture the PID",
-      "# Note: Environment variables from provisioner are not automatically passed to sudo, so we export them explicitly",
-      "$${SUDO} sh -c \"export ENABLE_CIS_HARDENING='${var.enable_cis_hardening}' && export CIS_S3_BUCKET='${var.cis_s3_bucket}' && export CIS_S3_PREFIX='${var.cis_s3_prefix}' && export AWS_REGION='${var.aws_region}' && nohup bash /opt/cis/cis-level2-hardening.sh > /var/log/cis-hardening.log 2>&1 & echo \\$! > /tmp/cis-hardening.pid\"",
-      "CIS_PID=$(cat /tmp/cis-hardening.pid)",
-      "echo \"✅ CIS hardening started in background (PID: $${CIS_PID})\"",
-      "echo '📋 Logs available at: /var/log/cis-hardening.log'",
-      "echo '⏳ Waiting for hardening to complete...'"
+    ansible_env_vars = [
+      "ANSIBLE_HOST_KEY_CHECKING=False",
+      "ANSIBLE_FORCE_COLOR=true",
+      "ANSIBLE_CONFIG=ansible/ansible.cfg"
     ]
   }
 
-  # Provisioning: Wait for CIS Hardening to Complete
-  # Poll status file until hardening completes (max 30 minutes)
-  # Uses trap to ensure script self-deletes even on early exit
-  provisioner "shell" {
-    inline = [
-      "# Setup cleanup trap for self-deletion",
-      "cleanup_wait_script() {",
-      "  SCRIPT_PATH=\"$${BASH_SOURCE[0]:-}\"",
-      "  if [ -n \"$${SCRIPT_PATH}\" ] && [ -f \"$${SCRIPT_PATH}\" ]; then",
-      "    if [[ \"$${SCRIPT_PATH}\" == /tmp/script_*.sh ]] || [[ \"$${SCRIPT_PATH}\" == /tmp/packer-shell* ]]; then",
-      "      (sleep 0.1; rm -f \"$${SCRIPT_PATH}\" 2>/dev/null) &",
-      "      rm -f \"$${SCRIPT_PATH}\" 2>/dev/null || true",
-      "    fi",
-      "  fi",
-      "}",
-      "trap cleanup_wait_script EXIT",
-      "if [ \"${var.enable_cis_hardening}\" != \"true\" ]; then",
-      "  exit 0",
-      "fi",
-      "MAX_WAIT=1800  # 30 minutes in seconds",
-      "WAIT_INTERVAL=10  # Check every 10 seconds",
-      "ELAPSED=0",
-      "EXIT_CODE=0",
-      "echo 'Starting to wait for CIS hardening completion...'",
-      "while [ $${ELAPSED} -lt $${MAX_WAIT} ]; do",
-      "  # Check for completion status files first",
-      "  if [ -f /tmp/cis-hardening.complete ]; then",
-      "    echo '✅ CIS hardening completed successfully'",
-      "    echo '📋 Last 50 lines of hardening log:'",
-      "    tail -50 /var/log/cis-hardening.log 2>/dev/null || echo 'Log file not found'",
-      "    EXIT_CODE=0",
-      "    break",
-      "  fi",
-      "  if [ -f /tmp/cis-hardening.failed ]; then",
-      "    echo '❌ CIS hardening failed'",
-      "    echo '📋 Last 100 lines of hardening log:'",
-      "    tail -100 /var/log/cis-hardening.log 2>/dev/null || echo 'Log file not found'",
-      "    EXIT_CODE=1",
-      "    break",
-      "  fi",
-      "  # Check if process is still running (if PID file exists)",
-      "  if [ -f /tmp/cis-hardening.pid ]; then",
-      "    PID=$(cat /tmp/cis-hardening.pid 2>/dev/null || echo '')",
-      "    if [ -n \"$${PID}\" ] && ps -p $${PID} > /dev/null 2>&1; then",
-      "      # Process is still running, continue waiting",
-      "      :",
-      "    elif [ -n \"$${PID}\" ]; then",
-      "      # Process died but no status file - might have crashed",
-      "      echo '⚠️  Process $${PID} is no longer running, but no status file found'",
-      "      echo 'Checking log for errors...'",
-      "      if tail -20 /var/log/cis-hardening.log 2>/dev/null | grep -i error > /dev/null; then",
-        "        echo '❌ Errors found in log'",
-        "        tail -100 /var/log/cis-hardening.log 2>/dev/null || true",
-        "        EXIT_CODE=1",
-        "        break",
-      "      fi",
-      "      # Wait a bit more in case status file is being written",
-      "      sleep 5",
-      "      if [ -f /tmp/cis-hardening.complete ]; then",
-      "        echo '✅ Status file appeared, hardening completed'",
-      "        EXIT_CODE=0",
-      "        break",
-      "      fi",
-      "      if [ -f /tmp/cis-hardening.failed ]; then",
-      "        echo '❌ Status file indicates failure'",
-      "        EXIT_CODE=1",
-      "        break",
-      "      fi",
-      "      echo '❌ Process died without creating status file'",
-      "      tail -100 /var/log/cis-hardening.log 2>/dev/null || true",
-      "      EXIT_CODE=1",
-      "      break",
-      "    fi",
-      "  else",
-      "    echo '⚠️  PID file not found, checking if hardening already completed...'",
-      "    sleep 2",
-      "    if [ -f /tmp/cis-hardening.complete ]; then",
-      "      echo '✅ Hardening already completed'",
-      "      EXIT_CODE=0",
-      "      break",
-      "    fi",
-      "  fi",
-      "  sleep $${WAIT_INTERVAL}",
-      "  ELAPSED=$((ELAPSED + WAIT_INTERVAL))",
-      "  if [ $((ELAPSED % 60)) -eq 0 ]; then",
-      "    echo \"⏳ Still waiting... ($((ELAPSED / 60)) minutes elapsed)\"",
-      "  fi",
-      "done",
-      "echo '❌ ERROR: CIS hardening timed out after $${MAX_WAIT} seconds'",
-      "if [ -f /tmp/cis-hardening.pid ]; then",
-      "  PID=$(cat /tmp/cis-hardening.pid 2>/dev/null || echo 'unknown')",
-      "  echo \"Process PID: $${PID}\"",
-      "  if [ \"$${PID}\" != \"unknown\" ] && ps -p $${PID} > /dev/null 2>&1; then",
-      "    echo 'Process is still running'",
-      "    ps aux | grep $${PID} | grep -v grep || true",
-      "  else",
-      "    echo 'Process is not running'",
-      "  fi",
-      "fi",
-      "echo 'Last 100 lines of log:'",
-      "tail -100 /var/log/cis-hardening.log 2>/dev/null || echo 'Log file not found'",
-      "EXIT_CODE=1",
-      "# Self-delete this script immediately to prevent Packer cleanup errors",
-      "# Do this before final exit to ensure it happens",
-      "SCRIPT_PATH=\"$${BASH_SOURCE[0]:-}\"",
-      "if [ -n \"$${SCRIPT_PATH}\" ] && [ -f \"$${SCRIPT_PATH}\" ]; then",
-      "  if [[ \"$${SCRIPT_PATH}\" == /tmp/script_*.sh ]] || [[ \"$${SCRIPT_PATH}\" == /tmp/packer-shell* ]]; then",
-      "    # Try immediate deletion",
-      "    rm -f \"$${SCRIPT_PATH}\" 2>/dev/null || true",
-      "    # Also try background deletion as fallback",
-      "    (sleep 0.1; rm -f \"$${SCRIPT_PATH}\" 2>/dev/null) &",
-      "    # Small delay to let deletion happen",
-      "    sleep 0.1",
-      "  fi",
-      "fi",
-      "# Exit with tracked exit code (trap will also try to clean up)",
-      "exit $${EXIT_CODE:-0}"
-    ]
-  }
-
-  # Note: CIS Assessment is now run as a separate validation job after AMI creation
-  # This allows assessment to run on a fresh instance launched from the built AMI
-
-  # Provisioning: Configure SSH (CIS hardening may have already configured this)
-  provisioner "shell" {
-    inline = [
-      "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
-      "# SSH hardening (if not already done by CIS hardening)",
-      "$${SUDO} sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config || true",
-      "$${SUDO} sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
-      "$${SUDO} sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config || true",
-      "$${SUDO} systemctl restart sshd || true"
-    ]
-  }
+  # Note: CIS Assessment is run as a separate workflow job after AMI creation
+  # using ansible/cis-assessment.yml against a test instance launched from the built AMI
   
   # Provisioning: Clean up
   # Note: Exclude Packer's temporary scripts (script_*.sh, packer-shell*) from cleanup
