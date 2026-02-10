@@ -36,21 +36,16 @@ Private Subnet (10.0.1.0/24) - Packer/build instances
 
 ## Local Usage
 
-### Initialize Terraform (with Terraform Cloud)
+### Initialize Terraform
 
 ```bash
 # Login to HCP Terraform (or set TF_TOKEN env var)
 terraform login
 
-# Create backend config
-cat > backend.terraform-cloud.hcl << 'EOF'
-organization = "your-org-name"
-workspaces { name = "your-workspace-name" }
-hostname = "app.terraform.io"
-EOF
-
-terraform init -backend-config=backend.terraform-cloud.hcl
+terraform init -input=false
 ```
+
+The `cloud` block in `versions.tf` defines organization (`kere-terra`) and workspace (`packer`).
 
 ### Plan Changes
 
@@ -97,13 +92,12 @@ Authentication uses **OIDC** (no long-lived credentials). The workflow assumes a
 
 **Terraform Cloud (state storage):**
 - **Secret** `TF_TOKEN`: HCP Terraform API token (Organization Settings → API Tokens → Create a team token)
-- **Variable** `TF_CLOUD_ORGANIZATION`: Your HCP Terraform organization name
-- **Variable** `TF_CLOUD_WORKSPACE`: Your HCP Terraform workspace name (create one in HCP Terraform first)
+- Organization and workspace are defined in `versions.tf` (`cloud` block)
 
 **AWS (OIDC for resource management):**
 - **Variable** `AWS_ROLE_ARN`: IAM role ARN — create via **`oidc/README.md`** (manual setup)
 
-Create the workspace in HCP Terraform before the first run. The OIDC role only needs AWS permissions (EC2, VPC, IAM) — no S3/DynamoDB for state.
+The OIDC role only needs AWS permissions (EC2, VPC, IAM) — no S3/DynamoDB for state.
 
 ### Run Workflow
    - Go to Actions → "Terraform VPC with SSM Support"

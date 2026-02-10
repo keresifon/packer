@@ -47,5 +47,4 @@ override.tf.json
 terraform.rc
 tfplan
 tfplan.*
-backend.terraform-cloud.hcl
 

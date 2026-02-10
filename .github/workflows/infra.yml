@@ -188,32 +188,13 @@ jobs:
           pwd
           ls -la *.tf
           
-          # Validate Terraform Cloud config
           if [ -z "$TF_TOKEN" ]; then
             echo "::error::TF_TOKEN secret is not set. Create an API token in HCP Terraform (Organization Settings → API Tokens) and add it as a repository secret."
             exit 1
           fi
-          if [ -z "${{ vars.TF_CLOUD_ORGANIZATION }}" ]; then
-            echo "::error::TF_CLOUD_ORGANIZATION variable is not set. Add your HCP Terraform organization name as a repository variable."
-            exit 1
-          fi
-          if [ -z "${{ vars.TF_CLOUD_WORKSPACE }}" ]; then
-            echo "::error::TF_CLOUD_WORKSPACE variable is not set. Add your HCP Terraform workspace name as a repository variable."
-            exit 1
-          fi
           
-          # Create backend config for Terraform Cloud
-          {
-            echo 'organization = "${{ vars.TF_CLOUD_ORGANIZATION }}"'
-            echo 'workspaces { name = "${{ vars.TF_CLOUD_WORKSPACE }}" }'
-            echo 'hostname = "app.terraform.io"'
-          } > backend.terraform-cloud.hcl
-          
-          echo "Configuring Terraform Cloud backend..."
-          echo "Organization: ${{ vars.TF_CLOUD_ORGANIZATION }}"
-          echo "Workspace: ${{ vars.TF_CLOUD_WORKSPACE }}"
-          
-          terraform init -reconfigure -backend-config=backend.terraform-cloud.hcl -input=false
+          echo "Initializing Terraform (cloud block in versions.tf)..."
+          terraform init -input=false
 
       - name: Terraform Validate
         if: github.event.inputs.terraform_action != 'destroy'

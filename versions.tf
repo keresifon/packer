@@ -8,8 +8,14 @@ terraform {
     }
   }
 
-  # Terraform Cloud / HCP Terraform - configured via -backend-config in workflow
-  backend "remote" {}
+  cloud { 
+    
+    organization = "kere-terra" 
+
+    workspaces { 
+      name = "packer" 
+    } 
+  } 
 }
 
 provider "aws" {
