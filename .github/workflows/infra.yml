@@ -54,6 +54,8 @@ jobs:
     permissions:
       contents: read
       id-token: write  # Required for OIDC with AWS
+    env:
+      TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN }}
     steps:
       - name: Checkout code
         run: |
@@ -182,9 +184,6 @@ jobs:
 
       - name: Terraform Init
         working-directory: ${{ github.workspace }}
-        env:
-          # Terraform reads token from TF_TOKEN_<hostname> (app.terraform.io → app_terraform_io)
-          TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN }}
         run: |
           pwd
           ls -la *.tf
