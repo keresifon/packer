@@ -149,20 +149,17 @@ build {
   provisioner "shell" {
     inline = [
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
+      "# Disable dnf-makecache to prevent background dnf locks that hang Packer",
+      "$${SUDO} systemctl disable --now dnf-makecache.timer 2>/dev/null || true",
+      "$${SUDO} systemctl stop dnf-makecache.service 2>/dev/null || true",
+      "$${SUDO} killall -9 dnf-makecache 2>/dev/null || true",
       "# Clean DNF cache and lock files to prevent corruption",
-      "$${SUDO} mkdir -p /var/cache/dnf",
-      "$${SUDO} find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true",
-      "$${SUDO} find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true",
+      "$${SUDO} rm -f /var/run/dnf.pid /var/cache/dnf/*.lock 2>/dev/null || true",
       "$${SUDO} dnf clean all || true",
-      "$${SUDO} dnf clean packages || true",
-      "$${SUDO} dnf clean metadata || true",
-      "# Update system packages (use --allowerasing to handle curl-minimal conflicts)",
+      "# Update system packages",
       "$${SUDO} dnf update -y --allowerasing --setopt=keepcache=0 --setopt=metadata_expire=0",
       "$${SUDO} dnf upgrade -y --allowerasing --setopt=keepcache=0 --setopt=metadata_expire=0",
-      "$${SUDO} dnf clean all || true",
-      "# Kill any background dnf-makecache processes to prevent Packer from hanging",
-      "$${SUDO} systemctl stop dnf-makecache.timer 2>/dev/null || true",
-      "$${SUDO} killall -9 dnf-makecache dnf 2>/dev/null || true"
+      "$${SUDO} dnf clean all || true"
     ]
   }
   
@@ -170,19 +167,8 @@ build {
   provisioner "shell" {
     inline = [
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
-      "# Clean DNF cache before each install to prevent corruption",
-      "$${SUDO} mkdir -p /var/cache/dnf",
-      "$${SUDO} find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true",
-      "$${SUDO} find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true",
-      "# Install common utilities (--allowerasing replaces curl-minimal with full curl)",
-      "$${SUDO} dnf install -y --allowerasing --setopt=keepcache=0 --setopt=metadata_expire=0 curl wget git unzip",
-      "$${SUDO} find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true",
-      "$${SUDO} dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 htop net-tools",
-      "$${SUDO} find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true",
-      "$${SUDO} dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 jq || echo 'Warning: jq installation skipped'",
-      "# Kill any background dnf-makecache processes to prevent Packer from hanging",
-      "$${SUDO} systemctl stop dnf-makecache.timer 2>/dev/null || true",
-      "$${SUDO} killall -9 dnf-makecache dnf 2>/dev/null || true"
+      "$${SUDO} dnf install -y --allowerasing --setopt=keepcache=0 curl wget git unzip htop net-tools",
+      "$${SUDO} dnf install -y --setopt=keepcache=0 jq || echo 'Warning: jq installation skipped'"
     ]
   }
   
@@ -192,10 +178,7 @@ build {
       "if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=''; fi",
       "if ! command -v amazon-ssm-agent >/dev/null 2>&1; then",
       "  echo 'SSM Agent not found, installing...'",
-      "  $${SUDO} mkdir -p /var/cache/dnf",
-      "  $${SUDO} find /var/cache/dnf -type f -name '*.pid' -delete 2>/dev/null || true",
-      "  $${SUDO} find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true",
-      "  $${SUDO} dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 amazon-ssm-agent || echo 'Warning: Failed to install SSM Agent'",
+      "  $${SUDO} dnf install -y --setopt=keepcache=0 amazon-ssm-agent || echo 'Warning: Failed to install SSM Agent'",
       "fi",
       "if $${SUDO} systemctl list-unit-files | grep -q amazon-ssm-agent.service; then",
       "  echo 'SSM Agent service found'",
