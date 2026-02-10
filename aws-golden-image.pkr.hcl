@@ -159,7 +159,10 @@ build {
       "# Update system packages (use --allowerasing to handle curl-minimal conflicts)",
       "$${SUDO} dnf update -y --allowerasing --setopt=keepcache=0 --setopt=metadata_expire=0",
       "$${SUDO} dnf upgrade -y --allowerasing --setopt=keepcache=0 --setopt=metadata_expire=0",
-      "$${SUDO} dnf clean all || true"
+      "$${SUDO} dnf clean all || true",
+      "# Kill any background dnf-makecache processes to prevent Packer from hanging",
+      "$${SUDO} systemctl stop dnf-makecache.timer 2>/dev/null || true",
+      "$${SUDO} killall -9 dnf-makecache dnf 2>/dev/null || true"
     ]
   }
   
@@ -176,7 +179,10 @@ build {
       "$${SUDO} find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true",
       "$${SUDO} dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 htop net-tools",
       "$${SUDO} find /var/cache/dnf -type f -name '*.rpm' -delete 2>/dev/null || true",
-      "$${SUDO} dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 jq || echo 'Warning: jq installation skipped'"
+      "$${SUDO} dnf install -y --setopt=keepcache=0 --setopt=metadata_expire=0 jq || echo 'Warning: jq installation skipped'",
+      "# Kill any background dnf-makecache processes to prevent Packer from hanging",
+      "$${SUDO} systemctl stop dnf-makecache.timer 2>/dev/null || true",
+      "$${SUDO} killall -9 dnf-makecache dnf 2>/dev/null || true"
     ]
   }
   
