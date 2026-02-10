@@ -1,24 +1,23 @@
-output "VPC_ID" {
+output "vpc_id" {
   description = "VPC ID"
   value       = aws_vpc.main.id
 }
 
-output "SUBNET_ID" {
+output "subnet_id" {
   description = "Private Subnet ID"
   value       = aws_subnet.private.id
 }
 
-output "SECURITY_GROUP_IDS" {
+output "security_group_ids" {
   description = "Security Group ID for Private Instances"
   value       = aws_security_group.private_instances.id
 }
 
-output "IAM_INSTANCE_PROFILE" {
+output "iam_instance_profile" {
   description = "IAM Instance Profile name for SSM"
   value       = aws_iam_instance_profile.packer_ssm.name
 }
 
-# Additional outputs for reference
 output "vpc_endpoints_security_group_id" {
   description = "Security Group ID for VPC Endpoints"
   value       = aws_security_group.vpc_endpoints.id
@@ -42,4 +41,14 @@ output "ec2_messages_endpoint_id" {
 output "s3_endpoint_id" {
   description = "S3 VPC Gateway Endpoint ID"
   value       = aws_vpc_endpoint.s3.id
+}
+
+output "nat_gateway_id" {
+  description = "NAT Gateway ID"
+  value       = aws_nat_gateway.main.id
+}
+
+output "public_subnet_id" {
+  description = "Public Subnet ID (NAT Gateway)"
+  value       = aws_subnet.public.id
 }

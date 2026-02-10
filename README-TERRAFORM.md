@@ -1,28 +1,37 @@
 # Terraform VPC with SSM Support
 
-This Terraform configuration creates a VPC in `us-east-1` with a single private subnet configured to support AWS Systems Manager (SSM) Session Manager via VPC endpoints.
+This Terraform configuration creates a VPC in `us-east-1` with public and private subnets, configured for an image pipeline (e.g., Packer). Private instances get outbound internet via NAT Gateway for package installs and downloads, while SSM Session Manager access is provided via VPC endpoints (no bastion required).
 
 ## Architecture
 
+```
+Internet
+    |
+    v
+Internet Gateway
+    |
+    v
+Public Subnet (10.0.0.0/24) - NAT Gateway
+    |
+    v (0.0.0.0/0 -> NAT Gateway)
+Private Subnet (10.0.1.0/24) - Packer/build instances
+```
+
 - **VPC**: `10.0.0.0/16` (configurable)
-- **Private Subnet**: `10.0.1.0/24` in Availability Zone 1
-- **VPC Endpoints**:
-  - SSM (`com.amazonaws.us-east-1.ssm`)
-  - SSM Messages (`com.amazonaws.us-east-1.ssmmessages`)
-  - EC2 Messages (`com.amazonaws.us-east-1.ec2messages`)
+- **Public Subnet**: `10.0.0.0/24` - hosts NAT Gateway only
+- **Private Subnet**: `10.0.1.0/24` - Packer EC2 instances (image pipeline)
+- **NAT Gateway**: Enables outbound internet for package installs, updates, downloads
+- **VPC Endpoints** (interface): SSM, SSM Messages, EC2 Messages (no bastion for access)
+- **VPC Endpoint** (gateway): S3 for CIS tools and reports
 - **Security Groups**:
-  - VPC Endpoints Security Group (allows HTTPS from VPC)
-  - Private Instances Security Group (allows outbound HTTPS to VPC endpoints)
+  - VPC Endpoints SG (HTTPS from VPC)
+  - Private Instances SG (outbound to VPC endpoints + internet via NAT)
 
 ## Prerequisites
 
 1. **AWS Account** with appropriate permissions
 2. **Terraform** >= 1.0 installed locally (or use GitHub Actions)
-3. **AWS Credentials** configured (via `aws configure` or environment variables)
-4. **GitHub Secrets** (for GitHub Actions):
-   - `AWS_ACCESS_KEY_ID`: AWS access key ID
-   - `AWS_SECRET_ACCESS_KEY`: AWS secret access key
-   - `AWS_SESSION_TOKEN`: AWS session token (optional, for temporary credentials)
+3. **AWS Credentials** (for initial/bootstrap apply): Configure via `aws configure` or environment variables
 
 ## Local Usage
 
@@ -58,7 +67,9 @@ Create a `terraform.tfvars` file:
 aws_region          = "us-east-1"
 project_name        = "my-vpc-ssm"
 vpc_cidr            = "10.0.0.0/16"
+public_subnet_cidr  = "10.0.0.0/24"
 private_subnet_cidr = "10.0.1.0/24"
+cis_tools_bucket    = "cis-tools-kere"
 ```
 
 Or use command-line flags:
@@ -69,16 +80,21 @@ terraform apply -var="project_name=my-vpc-ssm" -var="vpc_cidr=10.0.0.0/16"
 
 ## GitHub Actions Usage
 
-### Setup
+Authentication uses **OIDC** (no long-lived credentials). The workflow assumes an IAM role via `token.actions.githubusercontent.com`.
 
-1. **Configure GitHub Secrets**:
-   - Go to Repository → Settings → Secrets and variables → Actions
-   - Add secrets:
-     - `AWS_ACCESS_KEY_ID`: Your AWS access key ID
-     - `AWS_SECRET_ACCESS_KEY`: Your AWS secret access key
-     - `AWS_SESSION_TOKEN`: (Optional) AWS session token if using temporary credentials
+### OIDC Setup (Required First)
 
-2. **Run Workflow**:
+OIDC must be created **manually** before the pipeline can run, since the pipeline needs it for auth.
+
+1. Create the OIDC provider and IAM role — see **`oidc/README.md`** for step-by-step AWS Console and CLI instructions.
+
+2. Add repository variable:
+   - Go to Repository → Settings → Secrets and variables → Actions → Variables
+   - Add `AWS_ROLE_ARN` with the role ARN (e.g. `arn:aws:iam::123456789012:role/packer-vpc-ssm-github-actions-role`)
+
+3. **(Optional) Remove secrets**: After OIDC works, remove `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from Secrets.
+
+### Run Workflow
    - Go to Actions → "Terraform VPC with SSM Support"
    - Click "Run workflow"
    - Select action: `plan`, `apply`, or `destroy`
@@ -95,14 +111,15 @@ terraform apply -var="project_name=my-vpc-ssm" -var="vpc_cidr=10.0.0.0/16"
 
 After applying, Terraform outputs:
 
-- `VPC_ID`: VPC ID
-- `SUBNET_ID`: Private Subnet ID
-- `SECURITY_GROUP_IDS`: Security Group ID for EC2 instances
-- `IAM_INSTANCE_PROFILE`: IAM Instance Profile name
+- `vpc_id`: VPC ID
+- `subnet_id`: Private Subnet ID (for Packer builds)
+- `public_subnet_id`: Public Subnet ID (NAT Gateway)
+- `security_group_ids`: Security Group ID for EC2 instances
+- `iam_instance_profile`: IAM Instance Profile name
+- `nat_gateway_id`: NAT Gateway ID
 - `vpc_endpoints_security_group_id`: Security Group ID for VPC endpoints
-- `ssm_endpoint_id`: SSM VPC Endpoint ID
-- `ssm_messages_endpoint_id`: SSM Messages VPC Endpoint ID
-- `ec2_messages_endpoint_id`: EC2 Messages VPC Endpoint ID
+- `ssm_endpoint_id`, `ssm_messages_endpoint_id`, `ec2_messages_endpoint_id`: VPC endpoint IDs
+- `s3_endpoint_id`: S3 VPC Gateway Endpoint ID
 
 ## Using with Packer
 
@@ -110,9 +127,9 @@ After creating the VPC, use the outputs in your Packer build:
 
 ```bash
 # Get outputs
-VPC_ID=$(terraform output -raw VPC_ID)
-SUBNET_ID=$(terraform output -raw SUBNET_ID)
-SG_ID=$(terraform output -raw SECURITY_GROUP_IDS)
+VPC_ID=$(terraform output -raw vpc_id)
+SUBNET_ID=$(terraform output -raw subnet_id)
+SG_ID=$(terraform output -raw security_group_ids)
 
 # Use in Packer
 packer build \
@@ -123,24 +140,24 @@ packer build \
 ```
 
 Or set GitHub repository variables:
-- `VPC_ID`: Output from `terraform output -raw VPC_ID`
-- `SUBNET_ID`: Output from `terraform output -raw SUBNET_ID`
-- `SECURITY_GROUP_IDS`: Output from `terraform output -raw SECURITY_GROUP_IDS`
-- `IAM_INSTANCE_PROFILE`: Output from `terraform output -raw IAM_INSTANCE_PROFILE`
+- `VPC_ID`: Output from `terraform output -raw vpc_id`
+- `SUBNET_ID`: Output from `terraform output -raw subnet_id`
+- `SECURITY_GROUP_IDS`: Output from `terraform output -raw security_group_ids`
+- `IAM_INSTANCE_PROFILE`: Output from `terraform output -raw iam_instance_profile`
 
 ## Cost Considerations
 
+**NAT Gateway**:
+- **Hourly**: ~$0.045/hour (~$32/month)
+- **Data Processing**: $0.045 per GB processed
+
 **VPC Endpoints (Interface)**:
-- **Hourly**: ~$0.01 per endpoint per AZ (~$0.06/hour for 3 endpoints × 2 AZs = ~$43/month)
+- **Hourly**: ~$0.01 per endpoint per AZ (~$0.03/hour for 3 endpoints × 1 AZ = ~$22/month)
 - **Data Processing**: $0.01 per GB processed
 
-**VPC**:
-- Free (no additional charges)
+**VPC / Security Groups**: Free
 
-**Security Groups**:
-- Free
-
-**Total Estimated Cost**: ~$43-50/month (depending on data transfer)
+**Total Estimated Cost**: ~$54-70/month (NAT + interface endpoints, depends on data transfer)
 
 ## Verification
 
@@ -181,11 +198,16 @@ aws ssm start-session --target i-xxxxxxxxx --region us-east-1
 
 ## Files
 
-- `main.tf`: Main Terraform configuration
+- `main.tf`: Data sources
+- `vpc.tf`: VPC, subnets, route tables, Internet Gateway, NAT Gateway
+- `security_groups.tf`: Security groups for VPC endpoints and private instances
+- `vpc_endpoints.tf`: SSM, SSM Messages, EC2 Messages, and S3 VPC endpoints
+- `iam.tf`: IAM role, policies, instance profile (for EC2/SSM)
+- `oidc/README.md`: **Manual setup guide** for GitHub OIDC provider and IAM role (create before pipeline runs)
 - `variables.tf`: Input variables
 - `outputs.tf`: Output values
 - `versions.tf`: Provider and Terraform version requirements
-- `.github/workflows/terraform-vpc.yml`: GitHub Actions workflow
+- `.github/workflows/infra.yml`: GitHub Actions workflow
 
 ## Next Steps
 
