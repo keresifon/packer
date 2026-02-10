@@ -183,12 +183,13 @@ jobs:
       - name: Terraform Init
         working-directory: ${{ github.workspace }}
         env:
-          TF_TOKEN: ${{ secrets.TF_TOKEN }}
+          # Terraform reads token from TF_TOKEN_<hostname> (app.terraform.io → app_terraform_io)
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN }}
         run: |
           pwd
           ls -la *.tf
           
-          if [ -z "$TF_TOKEN" ]; then
+          if [ -z "${{ secrets.TF_TOKEN }}" ]; then
             echo "::error::TF_TOKEN secret is not set. Create an API token in HCP Terraform (Organization Settings → API Tokens) and add it as a repository secret."
             exit 1
           fi
