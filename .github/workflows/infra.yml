@@ -195,7 +195,7 @@ jobs:
           fi
           
           echo "Initializing Terraform (cloud block in versions.tf)..."
-          terraform init -input=false
+          terraform init -reconfigure -input=false
 
       - name: Terraform Validate
         if: github.event.inputs.terraform_action != 'destroy'
