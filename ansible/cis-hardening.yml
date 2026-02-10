@@ -22,6 +22,11 @@
       ansible.builtin.meta: end_play
       when: not (enable_cis_hardening | default(true) | bool)
 
+    - name: Set root password (required by CIS - root is locked on cloud AMIs)
+      ansible.builtin.user:
+        name: root
+        password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') | password_hash('sha512') }}"
+
   roles:
     - role: AMAZON2023_CIS
 
