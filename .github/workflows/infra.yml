@@ -194,8 +194,11 @@ jobs:
             exit 1
           fi
           
+          # Remove cached backend config (avoids migration attempt from old S3 backend)
+          rm -rf .terraform .terraform.lock.hcl 2>/dev/null || true
+          
           echo "Initializing Terraform (cloud block in versions.tf)..."
-          terraform init -reconfigure -input=false
+          terraform init -input=false
 
       - name: Terraform Validate
         if: github.event.inputs.terraform_action != 'destroy'
