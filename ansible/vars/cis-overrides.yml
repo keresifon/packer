@@ -17,5 +17,14 @@ setup_audit: false
 
 # Skip controls that are unavailable or may interfere with build
 amzn2023cis_config_aide: false   # AIDE not available in AL2023 base repos (disables all 1.3.x rules)
-amzn2023cis_firewall: nftables   # firewalld not available in AL2023 base repos, use nftables instead
+# Firewall - neither firewalld nor nftables available in AL2023 base repos
+amzn2023cis_rule_3_4_1_1: false  # Ensure nftables/firewalld installed
+amzn2023cis_rule_3_4_1_2: false  # Ensure single firewall utility
+amzn2023cis_rule_3_4_2_1: false  # nftables/firewalld rules
+amzn2023cis_rule_3_4_2_2: false
+amzn2023cis_rule_3_4_2_3: false
+amzn2023cis_rule_3_4_2_4: false
+amzn2023cis_rule_3_4_2_5: false
+amzn2023cis_rule_3_4_2_6: false
+amzn2023cis_rule_3_4_2_7: false
 # amzn2023cis_rule_5_2_4: false   # SSH AllowUsers (we set it above)
