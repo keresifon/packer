@@ -57,6 +57,21 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 
+      - name: Verify Ansible
+        run: |
+          echo "PATH: $PATH"
+          which ansible-playbook || echo "ansible-playbook not found in PATH"
+          ansible-playbook --version || echo "ansible-playbook --version failed"
+          # Ensure ansible-playbook is accessible from ~/bin if not in standard PATH
+          if ! command -v ansible-playbook >/dev/null 2>&1; then
+            ANSIBLE_PB=$(find /home -name "ansible-playbook" -type f 2>/dev/null | head -1)
+            if [ -n "$ANSIBLE_PB" ]; then
+              ln -sf "$ANSIBLE_PB" ~/bin/ansible-playbook
+              echo "Symlinked $ANSIBLE_PB -> ~/bin/ansible-playbook"
+            fi
+          fi
+          ansible-playbook --version
+
       - name: Setup Packer
         run: |
           PACKER_VERSION="${PACKER_VERSION:-1.14.3}"
@@ -115,6 +130,16 @@ jobs:
           mkdir -p ~/bin ~/.local/bin
           echo "$HOME/bin" >> $GITHUB_PATH
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Verify Ansible
+        run: |
+          if ! command -v ansible-playbook >/dev/null 2>&1; then
+            ANSIBLE_PB=$(find /home -name "ansible-playbook" -type f 2>/dev/null | head -1)
+            if [ -n "$ANSIBLE_PB" ]; then
+              ln -sf "$ANSIBLE_PB" ~/bin/ansible-playbook
+            fi
+          fi
+          ansible-playbook --version
 
       - name: Setup Packer
         run: |
