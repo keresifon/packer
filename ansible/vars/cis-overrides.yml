@@ -27,4 +27,12 @@ amzn2023cis_rule_3_4_2_4: false
 amzn2023cis_rule_3_4_2_5: false
 amzn2023cis_rule_3_4_2_6: false
 amzn2023cis_rule_3_4_2_7: false
+# rsyslog - not available in AL2023 base repos (AL2023 uses journald)
+amzn2023cis_rule_5_1_1_1: false  # Ensure rsyslog installed
+amzn2023cis_rule_5_1_1_2: false  # rsyslog service enabled
+amzn2023cis_rule_5_1_1_3: false  # rsyslog permissions
+amzn2023cis_rule_5_1_1_4: false  # rsyslog logging configured
+amzn2023cis_rule_5_1_1_5: false  # rsyslog remote logging
+amzn2023cis_rule_5_1_1_6: false  # rsyslog not receiving remote logs
+amzn2023cis_rule_5_1_1_7: false  # rsyslog not receiving remote logs
 # amzn2023cis_rule_5_2_4: false   # SSH AllowUsers (we set it above)
