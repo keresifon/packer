@@ -31,14 +31,25 @@ Private Subnet (10.0.1.0/24) - Packer/build instances
 
 1. **AWS Account** with appropriate permissions
 2. **Terraform** >= 1.0 installed locally (or use GitHub Actions)
-3. **AWS Credentials** (for initial/bootstrap apply): Configure via `aws configure` or environment variables
+3. **Terraform Cloud / HCP Terraform** for state storage (no S3 needed)
+4. **AWS Credentials** (for local apply): Configure via `aws configure` or environment variables
 
 ## Local Usage
 
-### Initialize Terraform
+### Initialize Terraform (with Terraform Cloud)
 
 ```bash
-terraform init
+# Login to HCP Terraform (or set TF_TOKEN env var)
+terraform login
+
+# Create backend config
+cat > backend.terraform-cloud.hcl << 'EOF'
+organization = "your-org-name"
+workspaces { name = "your-workspace-name" }
+hostname = "app.terraform.io"
+EOF
+
+terraform init -backend-config=backend.terraform-cloud.hcl
 ```
 
 ### Plan Changes
@@ -82,17 +93,17 @@ terraform apply -var="project_name=my-vpc-ssm" -var="vpc_cidr=10.0.0.0/16"
 
 Authentication uses **OIDC** (no long-lived credentials). The workflow assumes an IAM role via `token.actions.githubusercontent.com`.
 
-### OIDC Setup (Required First)
+### Required Configuration
 
-OIDC must be created **manually** before the pipeline can run, since the pipeline needs it for auth.
+**Terraform Cloud (state storage):**
+- **Secret** `TF_TOKEN`: HCP Terraform API token (Organization Settings → API Tokens → Create a team token)
+- **Variable** `TF_CLOUD_ORGANIZATION`: Your HCP Terraform organization name
+- **Variable** `TF_CLOUD_WORKSPACE`: Your HCP Terraform workspace name (create one in HCP Terraform first)
 
-1. Create the OIDC provider and IAM role — see **`oidc/README.md`** for step-by-step AWS Console and CLI instructions.
+**AWS (OIDC for resource management):**
+- **Variable** `AWS_ROLE_ARN`: IAM role ARN — create via **`oidc/README.md`** (manual setup)
 
-2. Add repository variable:
-   - Go to Repository → Settings → Secrets and variables → Actions → Variables
-   - Add `AWS_ROLE_ARN` with the role ARN (e.g. `arn:aws:iam::123456789012:role/packer-vpc-ssm-github-actions-role`)
-
-3. **(Optional) Remove secrets**: After OIDC works, remove `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from Secrets.
+Create the workspace in HCP Terraform before the first run. The OIDC role only needs AWS permissions (EC2, VPC, IAM) — no S3/DynamoDB for state.
 
 ### Run Workflow
    - Go to Actions → "Terraform VPC with SSM Support"

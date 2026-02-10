@@ -40,11 +40,8 @@ on:
 env:
   TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
   AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
-  # Terraform Backend Configuration (set via GitHub repository variables)
-  TF_BACKEND_BUCKET: ${{ vars.TERRAFORM_STATE_BUCKET || '' }}
-  TF_BACKEND_KEY: ${{ vars.TERRAFORM_STATE_KEY || 'terraform.tfstate' }}
-  TF_BACKEND_REGION: ${{ vars.TERRAFORM_STATE_REGION || github.event.inputs.aws_region || 'us-east-1' }}
-  TF_BACKEND_DYNAMODB_TABLE: ${{ vars.TERRAFORM_STATE_DYNAMODB_TABLE || '' }}
+  TF_IN_AUTOMATION: true
+  # Terraform Cloud / HCP Terraform - TF_TOKEN from secrets, org/workspace from vars
 
 concurrency:
   group: terraform-infra-${{ github.ref }}
@@ -185,32 +182,38 @@ jobs:
 
       - name: Terraform Init
         working-directory: ${{ github.workspace }}
+        env:
+          TF_TOKEN: ${{ secrets.TF_TOKEN }}
         run: |
           pwd
           ls -la *.tf
           
-          # Configure backend if bucket is provided
-          if [ -n "$TF_BACKEND_BUCKET" ] && [ "$TF_BACKEND_BUCKET" != "" ]; then
-            echo "Configuring S3 backend..."
-            echo "Bucket: $TF_BACKEND_BUCKET"
-            echo "Key: $TF_BACKEND_KEY"
-            echo "Region: $TF_BACKEND_REGION"
-            
-            BACKEND_CONFIG="-backend-config=bucket=$TF_BACKEND_BUCKET"
-            BACKEND_CONFIG="$BACKEND_CONFIG -backend-config=key=$TF_BACKEND_KEY"
-            BACKEND_CONFIG="$BACKEND_CONFIG -backend-config=region=$TF_BACKEND_REGION"
-            
-            if [ -n "$TF_BACKEND_DYNAMODB_TABLE" ] && [ "$TF_BACKEND_DYNAMODB_TABLE" != "" ]; then
-              echo "DynamoDB Table: $TF_BACKEND_DYNAMODB_TABLE"
-              BACKEND_CONFIG="$BACKEND_CONFIG -backend-config=dynamodb_table=$TF_BACKEND_DYNAMODB_TABLE"
-            fi
-            
-            terraform init -reconfigure $BACKEND_CONFIG
-          else
-            echo "⚠️  WARNING: No backend bucket configured. Using local state."
-            echo "Set TERRAFORM_STATE_BUCKET repository variable to use S3 backend."
-            terraform init
+          # Validate Terraform Cloud config
+          if [ -z "$TF_TOKEN" ]; then
+            echo "::error::TF_TOKEN secret is not set. Create an API token in HCP Terraform (Organization Settings → API Tokens) and add it as a repository secret."
+            exit 1
           fi
+          if [ -z "${{ vars.TF_CLOUD_ORGANIZATION }}" ]; then
+            echo "::error::TF_CLOUD_ORGANIZATION variable is not set. Add your HCP Terraform organization name as a repository variable."
+            exit 1
+          fi
+          if [ -z "${{ vars.TF_CLOUD_WORKSPACE }}" ]; then
+            echo "::error::TF_CLOUD_WORKSPACE variable is not set. Add your HCP Terraform workspace name as a repository variable."
+            exit 1
+          fi
+          
+          # Create backend config for Terraform Cloud
+          {
+            echo 'organization = "${{ vars.TF_CLOUD_ORGANIZATION }}"'
+            echo 'workspaces { name = "${{ vars.TF_CLOUD_WORKSPACE }}" }'
+            echo 'hostname = "app.terraform.io"'
+          } > backend.terraform-cloud.hcl
+          
+          echo "Configuring Terraform Cloud backend..."
+          echo "Organization: ${{ vars.TF_CLOUD_ORGANIZATION }}"
+          echo "Workspace: ${{ vars.TF_CLOUD_WORKSPACE }}"
+          
+          terraform init -reconfigure -backend-config=backend.terraform-cloud.hcl -input=false
 
       - name: Terraform Validate
         if: github.event.inputs.terraform_action != 'destroy'

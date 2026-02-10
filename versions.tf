@@ -8,13 +8,8 @@ terraform {
     }
   }
 
-  backend "s3" {
-    # Backend configuration is provided via:
-    # - terraform init -backend-config="bucket=..." -backend-config="key=..." etc.
-    # - Or via backend.hcl file
-    # - Or via environment variables: TF_BACKEND_BUCKET, TF_BACKEND_KEY, etc.
-    # This allows flexibility without hardcoding values
-  }
+  # Terraform Cloud / HCP Terraform - configured via -backend-config in workflow
+  backend "remote" {}
 }
 
 provider "aws" {
