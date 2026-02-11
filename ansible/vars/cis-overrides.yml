@@ -11,9 +11,9 @@ amzn2023cis_level2: true
 # SSH - ensure ec2-user is allowed (required for Packer/SSM connectivity)
 amzn2023cis_sshd_allow_users: "ec2-user"
 
-# Disable audit during hardening (separate assessment job handles this)
-run_audit: false
-setup_audit: false
+# Enable goss audit at the end of hardening to verify compliance
+run_audit: true
+setup_audit: true
 
 # Skip controls that are unavailable or may interfere with build
 amzn2023cis_config_aide: false   # AIDE not available in AL2023 base repos (disables all 1.3.x rules)
