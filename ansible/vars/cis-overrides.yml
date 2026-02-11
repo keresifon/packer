@@ -35,4 +35,5 @@ amzn2023cis_rule_5_1_1_4: false  # rsyslog logging configured
 amzn2023cis_rule_5_1_1_5: false  # rsyslog remote logging
 amzn2023cis_rule_5_1_1_6: false  # rsyslog not receiving remote logs
 amzn2023cis_rule_5_1_1_7: false  # rsyslog not receiving remote logs
+amzn2023cis_rule_5_3: false      # rsyslog-logrotate not available in AL2023
 # amzn2023cis_rule_5_2_4: false   # SSH AllowUsers (we set it above)
